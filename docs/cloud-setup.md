@@ -1,5 +1,22 @@
 # Isolated cloud deployment
 
+## Git deployment update — 2026-11-03
+
+The repository was transferred to `https://github.com/JungYeonWon/capstone`.
+The existing Vercel `capstone-cloud` project is connected to that repository,
+with `main` as its production branch. Pushes to `main` trigger Vercel builds;
+successful production builds update `https://capstone-cloud.vercel.app`.
+The GitHub Vercel app is scoped to the `capstone` repository.
+
+Database schema migrations must be reviewed and applied separately before any
+code that depends on them is released. Git deployment does not migrate the
+Supabase database or rotate encryption keys. Existing production secrets stay
+in Vercel and must never be committed. Non-production branches do not receive
+production database credentials automatically.
+
+The initial-isolation notes below describe the original setup, before the
+owner authorized using a single shared `main` branch.
+
 The original `capstone` checkout and existing cloud projects must not be modified.
 This checkout was cloned locally without secrets, database files, or uploaded documents.
 Its original Git remote was removed to prevent accidental pushes to the original repository.
