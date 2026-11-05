@@ -50,7 +50,7 @@ class CustomPlanTests(unittest.TestCase):
     def base(self):return f'/api/v1/contracts/{self.contract.id}/custom-plan'
 
     def layout(self):
-        response=self.client.post(self.base+'/propose',headers=self.headers[0],json={'request':self.request})
+        response=self.client.post(self.base+'/propose',headers=self.headers[0],json={'document_type':'work_plan','request':self.request})
         self.assertEqual(response.status_code,200,response.text)
         return response.json()['layout']
 
@@ -95,20 +95,20 @@ class CustomPlanTests(unittest.TestCase):
     def test_external_ai_requires_exact_preview_and_receives_no_company_or_contract(self):
         request=self.request+' 연락은 fictional@example.invalid 로 해줘'
         with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value=custom_plans.local_layout(request).model_dump()) as ai:
-            preview=self.client.post(self.base+'/transmission',headers=self.headers[0],json={'request':request}).json()
+            preview=self.client.post(self.base+'/transmission',headers=self.headers[0],json={'document_type':'work_plan','request':request}).json()
             self.assertNotIn('fictional@example.invalid',preview['payload_preview'])
             self.assertNotIn('비공개업체',preview['payload_preview']);self.assertNotIn('비공개계약명',preview['payload_preview'])
-            self.assertEqual(self.client.post(self.base+'/propose',headers=self.headers[0],json={'request':request,'use_ai':True}).status_code,400)
+            self.assertEqual(self.client.post(self.base+'/propose',headers=self.headers[0],json={'document_type':'work_plan','request':request,'use_ai':True}).status_code,400)
             ai.assert_not_called()
-            response=self.client.post(self.base+'/propose',headers=self.headers[0],json={'request':request,'use_ai':True,'consent_digest':preview['consent_digest']})
+            response=self.client.post(self.base+'/propose',headers=self.headers[0],json={'document_type':'work_plan','request':request,'use_ai':True,'consent_digest':preview['consent_digest']})
             self.assertEqual(response.status_code,200);self.assertEqual(response.json()['mode'],'ai')
             self.assertEqual(ai.call_args.args[1],preview['payload_preview'])
-            self.assertEqual(self.client.post(self.base+'/propose',headers=self.headers[0],json={'request':request+'変更','use_ai':True,'consent_digest':preview['consent_digest']}).status_code,400)
+            self.assertEqual(self.client.post(self.base+'/propose',headers=self.headers[0],json={'document_type':'work_plan','request':request+'変更','use_ai':True,'consent_digest':preview['consent_digest']}).status_code,400)
 
     def test_invalid_ai_layout_falls_back_without_executing_renderer_instructions(self):
         with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value={'sections':[{'kind':'raw_html','html':'<script>attack()</script>'}]}):
             preview=custom_plans.transfer(self.request)
-            response=self.client.post(self.base+'/propose',headers=self.headers[0],json={'request':self.request,'use_ai':True,'consent_digest':preview['consent_digest']})
+            response=self.client.post(self.base+'/propose',headers=self.headers[0],json={'document_type':'work_plan','request':self.request,'use_ai':True,'consent_digest':preview['consent_digest']})
             self.assertEqual(response.status_code,200);self.assertEqual(response.json()['mode'],'rule_fallback')
             self.assertNotIn('<script>',str(response.json()['layout']))
 
@@ -117,9 +117,9 @@ class CustomPlanTests(unittest.TestCase):
             return Template(name=name,kind='uploaded',owner_id=owner,status='ready',definition={'library':{'scope':scope,'organization':'가상발주처','document_type':doc_type,'project_code':code}})
         candidates=[template('해당사업 계획서','과업수행계획서','BID-1'),template('다른사업 계획서','과업수행계획서','BID-2'),template('사용인감계','사용인감계'),template('타인 비공개 계획서','과업수행계획서',owner=self.users[1].id,scope='private')]
         self.db.add_all(candidates);self.db.commit()
-        response=self.client.post(self.base+'/propose',headers=self.headers[0],json={'request':self.request,'project_code':'BID-1'})
+        response=self.client.post(self.base+'/propose',headers=self.headers[0],json={'document_type':'work_plan','request':self.request,'project_code':'BID-1'})
         self.assertEqual([row['name'] for row in response.json()['matches']],['해당사업 계획서'])
-        self.assertEqual(self.client.post(self.base+'/propose',headers=self.headers[0],json={'request':self.request}).json()['matches'],[])
+        self.assertEqual(self.client.post(self.base+'/propose',headers=self.headers[0],json={'document_type':'work_plan','request':self.request}).json()['matches'],[])
 
     def test_created_layout_private_encrypted_and_unknown_staff_dates_remain_empty(self):
         result=self.create();doc=result['document']
@@ -199,6 +199,69 @@ class CustomPlanTests(unittest.TestCase):
         doc=self.client.get(f"/api/v1/documents/{result['document']['id']}",headers=self.headers[0]).json()
         self.assertEqual(doc['values']['work_summary'],'')
         self.assertEqual(doc['values']['contract_title'],'수정 계약')
+
+    def test_free_layout_uses_arbitrary_title_sections_and_tables_with_bound_consent(self):
+        body={'title':'행사 안전관리계획서','purpose':'발주처에 안전 대응 절차 설명',
+              'request':'위험요소별 대응표와 비상 연락망을 포함해 주세요.'}
+        layout={'title':body['title'],'document_type':'free','sections':[
+            {'key':'custom_1','label':'위험요소별 대응','kind':'table','columns':['위험요소','대응 방안'],'required':True},
+            {'key':'custom_2','label':'비상 연락망','kind':'table','columns':['역할','연락처'],'required':False},
+            {'key':'custom_3','label':'현장 대응 절차','kind':'text','columns':[],'required':True}]}
+        with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value=layout) as ai:
+            preview=self.client.post(self.base+'/transmission',headers=self.headers[0],json=body).json()
+            self.assertIn(body['title'],preview['payload_preview'])
+            self.assertIn(body['purpose'],preview['payload_preview'])
+            for field in ('title','purpose','request'):
+                changed={**body,field:body[field]+' 수정','use_ai':True,'consent_digest':preview['consent_digest']}
+                self.assertEqual(self.client.post(self.base+'/propose',headers=self.headers[0],json=changed).status_code,400)
+            ai.assert_not_called()
+            response=self.client.post(self.base+'/propose',headers=self.headers[0],json={**body,'use_ai':True,'consent_digest':preview['consent_digest']})
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.json()['mode'],'ai')
+            self.assertEqual(ai.call_args.args[1],preview['payload_preview'])
+        created=self.client.post(self.base,headers=self.headers[0],json={**body,'layout':response.json()['layout'],'acknowledge_unofficial':True})
+        self.assertEqual(created.status_code,200,created.text)
+        doc=created.json()['document']; id_=doc['id']
+        self.assertNotIn('work_summary',doc['field_keys'])
+        self.assertEqual(doc['values']['custom_1'],'')
+        self.assertEqual(doc['values']['custom_3'],'')
+        with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value={'values':[{'key':'custom_3','text':'안내 담당자가 현장 상황을 확인합니다.'}]}) as ai:
+            path=f'/api/v1/documents/{id_}/draft'
+            preview=self.client.post(path+'/preview',headers=self.headers[0],json={}).json()
+            context=json.loads(preview['payload_preview'])
+            self.assertEqual(context['title'],body['title'])
+            self.assertIn(body['purpose'],context['request'])
+            suggestion=self.client.post(path+'/suggest',headers=self.headers[0],json={'use_ai':True,'consent_digest':preview['consent_digest']})
+            self.assertEqual(suggestion.status_code,200,suggestion.text)
+            self.assertEqual(suggestion.json()['mode'],'ai')
+            self.assertIn('custom_3',suggestion.json()['values'])
+            self.assertEqual(ai.call_args.args[1],preview['payload_preview'])
+        self.client.put(f'/api/v1/contracts/{self.contract.id}',headers=self.headers[0],json={'description':'계약 범위 변경'})
+        self.assertEqual(self.client.get(f'/api/v1/documents/{id_}',headers=self.headers[0]).json()['values']['custom_3'],'')
+        self.client.put(f'/api/v1/documents/{id_}',headers=self.headers[0],json={'values':{'custom_1':'혼잡 | 동선 분리','custom_3':'현장 담당자에게 상황 전달'}})
+        for route in ('download?format=native','download?format=pdf','preview-pages'):
+            result=self.client.get(f'/api/v1/documents/{id_}/{route}',headers=self.headers[0])
+            self.assertEqual(result.status_code,200,route)
+        version=self.client.post(f"/api/v1/templates/{doc['template_id']}/versions",headers=self.headers[0],json={'layout':{**layout,'sections':layout['sections'][:1]},'note':'대응표만 남김'})
+        self.assertEqual(version.status_code,200,version.text)
+
+    def test_free_manual_skeleton_and_invalid_ai_fallback_are_not_legacy_forms(self):
+        body={'title':'장비 반출 확인서','purpose':'장비 반출 내용을 기록','request':'장비 목록과 반출 확인 사항을 구성해 주세요.'}
+        response=self.client.post(self.base+'/propose',headers=self.headers[0],json=body)
+        self.assertEqual(response.status_code,200,response.text)
+        layout=response.json()['layout']
+        self.assertEqual(layout['document_type'],'free')
+        self.assertEqual(layout['title'],body['title'])
+        self.assertTrue(all(s['key'].startswith('custom_') for s in layout['sections']))
+        for invalid in ({**layout,'sections':[]},{**layout,'sections':[layout['sections'][0]]*2},
+                        {**layout,'sections':[{**layout['sections'][0],'key':'description'}]}):
+            result=self.client.post(self.base,headers=self.headers[0],json={**body,'layout':invalid,'acknowledge_unofficial':True})
+            self.assertEqual(result.status_code,422,result.text)
+        with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value=custom_plans.local_layout('기존 계획').model_dump()):
+            preview=self.client.post(self.base+'/transmission',headers=self.headers[0],json=body).json()
+            response=self.client.post(self.base+'/propose',headers=self.headers[0],json={**body,'use_ai':True,'consent_digest':preview['consent_digest']})
+            self.assertEqual(response.json()['mode'],'rule_fallback')
+            self.assertEqual(response.json()['layout']['document_type'],'free')
 
 
 if __name__=='__main__':unittest.main()

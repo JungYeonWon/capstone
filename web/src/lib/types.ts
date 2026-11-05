@@ -43,7 +43,7 @@ export type TemplateField = {
 };
 
 export type CustomPlanSection = { key: string; label: string; kind: "text" | "table"; columns: string[]; required: boolean };
-export type DocumentType = "work_plan" | "proposal" | "report" | "pledge";
+export type DocumentType = "free" | "work_plan" | "proposal" | "report" | "pledge";
 export type CustomPlanLayout = { title: string; sections: CustomPlanSection[]; document_type?: DocumentType };
 
 export type Template = {

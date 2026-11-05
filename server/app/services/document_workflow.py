@@ -48,7 +48,7 @@ def draft_context(doc, company, body):
     base = base_values(company, doc.contract)
     source = {key: base.get(key, '') for key in allowed}
     # Use only this document's section values and explicit answers, never bank/seal/private libraries.
-    return {'document_type': doc.template.definition['library'].get('document_type'),
+    return {'title': doc.title, 'document_type': doc.template.definition['library'].get('document_type'),
             'request': doc.template.definition['custom_plan'].get('request',''),
             'confirmed_contract': source,
             'sections': [{**s, 'current': body.values.get(s['key'], doc.values.get(s['key'],'')),

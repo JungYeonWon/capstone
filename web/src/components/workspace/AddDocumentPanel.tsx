@@ -14,7 +14,7 @@ type SearchRes = { results: { template: Template; score: number; ai: boolean; re
 const TABS = [
   { id: "search", label: "서류 검색", sub: "CASE 1 · 기본 양식" },
   { id: "upload", label: "자체 양식", sub: "CASE 2 · 업로드" },
-  { id: "custom", label: "맞춤 초안", sub: "CASE 3 · 구성 만들기" },
+  { id: "custom", label: "AI 자유 양식", sub: "CASE 3 · 새 양식 만들기" },
   { id: "notice", label: "안내문 분석", sub: "제출 체크리스트" },
 ] as const;
 
