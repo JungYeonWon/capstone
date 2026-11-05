@@ -84,7 +84,7 @@ def propose(request: str, use_ai: bool) -> tuple[PlanLayout,str]:
         'key는 제공된 키 또는 custom_1~custom_9, kind는 text 또는 table이다. '
         'work_summary와 description은 반드시 포함한다. 최대 12개 항목, 표 열은 2~6개이다. '
         '필수 항목은 required:true이며 text 항목의 columns는 빈 배열이다.',
-        transfer(request)['payload_preview'])
+        transfer(request)['payload_preview'], response_model=PlanLayout)
     try:
         return PlanLayout.model_validate(data),'ai'
     except (ValueError,TypeError):

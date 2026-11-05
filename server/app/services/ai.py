@@ -28,10 +28,19 @@ def _client():
     return OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
-def _chat_json(system: str, user: str) -> dict | None:
+def _chat_json(system: str, user: str, *, response_model=None) -> dict | None:
     if not settings.ai_enabled:
         return None
     try:
+        if response_model is not None:
+            res = _client().beta.chat.completions.parse(
+                model=settings.OPENAI_MODEL,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                response_format=response_model,
+                temperature=0,
+            )
+            parsed = res.choices[0].message.parsed
+            return parsed.model_dump() if parsed is not None else None
         res = _client().chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
