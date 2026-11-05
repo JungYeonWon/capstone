@@ -6,6 +6,7 @@ python-dotenv
 pyjwt
 bcrypt
 python-docx
+olefile==0.47
 openpyxl
 pypdf
 reportlab

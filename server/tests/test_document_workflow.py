@@ -251,6 +251,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result.status_code,200,result.text);self.assertEqual(result.json()['pages'],2)
         self.assertIn('2',result.json()['warning'])
 
+    def test_notice_office_uploads_are_private_and_do_not_store_originals(self):
+        from tests.test_notice_files import word_notice, hwpx_notice, hwp_notice
+        path=self.base+'/notice/extract'
+        for name,data in [('notice.docx',word_notice()),('notice.hwpx',hwpx_notice()),('notice.hwp',hwp_notice())]:
+            with self.subTest(name=name):
+                result=self.client.post(path,headers=self.headers[0],files={'file':(name,data,'application/octet-stream')})
+                self.assertEqual(result.status_code,200,result.text)
+                self.assertIn('착수신고서',result.json()['text'])
+                denied=self.client.post(path,headers=self.headers[1],files={'file':(name,data,'application/octet-stream')})
+                self.assertEqual(denied.status_code,404)
+        self.assertEqual(self.db.query(WorkspaceState).count(),0)
+
     def test_submission_detects_review_markers_partial_tables_and_malformed_rows(self):
         doc=self.create();values={'work_method':'[검토용 제안] 확인할 문구','staff_plan':'가상담당 | | 점검'}
         self.put(f"/api/v1/documents/{doc['id']}",{'values':values})

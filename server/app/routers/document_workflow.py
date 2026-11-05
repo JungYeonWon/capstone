@@ -138,31 +138,10 @@ def notice_analyze(contract_id:int,body:flow.NoticeIn,request:Request,user:User=
 async def notice_extract(contract_id:int,file:UploadFile=File(...),user:User=Depends(get_current_user),db:Session=Depends(get_db)):
     get_owned(db,user,contract_id)
     data=await file.read(3*1024*1024+1)
-    if len(data)>3*1024*1024:raise HTTPException(413,'안내문 파일은 3MB 이하여야 합니다.')
-    if not data.startswith(b'%PDF-'):
-        if not (file.filename or '').lower().endswith('.txt'):raise HTTPException(422,'텍스트 PDF 또는 UTF-8 TXT 파일을 사용하세요.')
-        try: text=data.decode('utf-8-sig').strip()
-        except UnicodeDecodeError:raise HTTPException(422,'TXT 파일은 UTF-8로 저장하거나 내용을 직접 붙여넣으세요.') from None
-        if '\x00' in text:raise HTTPException(422,'텍스트 파일을 읽을 수 없습니다.')
-        if len(text)>20000:raise HTTPException(413,'안내문 텍스트는 20,000자 이하여야 합니다.')
-        if len(text)<5:raise HTTPException(422,'안내문 내용은 5자 이상이어야 합니다.')
-        return {'text':text,'pages':None,'warning':''}
-    try:
-        import pymupdf
-        with pymupdf.open(stream=data,filetype='pdf') as pdf:
-            if pdf.needs_pass or not 1<=pdf.page_count<=20:raise HTTPException(422,'암호 없는 1~20페이지 PDF를 사용하세요.')
-            chunks=[]; size=0; empty_pages=[]; pages=pdf.page_count
-            for page in pdf:
-                text=page.get_text(sort=True)
-                if not text.strip():empty_pages.append(page.number+1)
-                size+=len(text)+1
-                if size>20000:raise HTTPException(413,'안내문 텍스트는 20,000자 이하여야 합니다.')
-                chunks.append(text)
-        text='\n'.join(chunks).strip()
-        if len(text)<5:raise HTTPException(422,'텍스트를 읽을 수 없습니다. 스캔 PDF는 내용을 직접 붙여넣으세요.')
-        return {'text':text,'pages':pages,'warning':f"텍스트를 읽지 못한 페이지: {', '.join(map(str,empty_pages))}. 해당 페이지의 내용을 직접 보완하세요." if empty_pages else ''}
-    except HTTPException:raise
-    except Exception:raise HTTPException(422,'PDF를 읽을 수 없습니다.') from None
+    from starlette.concurrency import run_in_threadpool
+    from app.services.notice_files import extract_notice
+    return await run_in_threadpool(extract_notice,data,file.filename or '')
+
 
 
 class VersionIn(BaseModel):

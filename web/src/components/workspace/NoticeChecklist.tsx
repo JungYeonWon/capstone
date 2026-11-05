@@ -57,15 +57,15 @@ export default function NoticeChecklist({ contractId, active, onDocumentsChanged
     <p className="text-xs text-muted">안내문을 넣으면 제출 서류와 기한·방법·문의처를 원문 근거와 함께 정리합니다. 분석 결과를 확인하고 적용하세요.</p>
     <ErrorText>{error || draft.error}</ErrorText><p role="status" className="text-xs text-muted">{draft.status}</p>
     {draft.ready && <>
-      <label className="block text-sm">안내문 파일 (PDF·TXT)<input aria-label="안내문 파일 선택" type="file" accept="application/pdf,.pdf,text/plain,.txt" className="mt-1 block w-full text-xs" disabled={busy} onChange={e => {
+      <label className="block text-sm">안내문 파일 (PDF·한글·Word·TXT)<input aria-label="안내문 파일 선택" type="file" accept=".pdf,.hwp,.hwpx,.docx,.txt,application/pdf,application/haansofthwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" className="mt-1 block w-full text-xs" disabled={busy} onChange={e => {
         const file = e.target.files?.[0]; if (!file) return;
         void act(async () => {
           if (file.size > 3 * 1024 * 1024) throw new Error("안내문 파일은 3MB 이하여야 합니다.");
           const result = await api.upload<{ text: string; warning: string }>(`/contracts/${contractId}/notice/extract`, file);
-          changeText(result.text); setMessage(result.warning || `${file.name}에서 ${result.text.length.toLocaleString()}자를 가져왔습니다.`);
+          changeText(result.text); setMessage(`${file.name}에서 ${result.text.length.toLocaleString()}자를 가져왔습니다. ${result.warning || ""}`);
         }); e.target.value = "";
       }} /></label>
-      <p className="text-xs text-muted">텍스트 PDF 3MB·20페이지 이하, UTF-8 TXT 지원. 원본 파일은 저장하지 않습니다. 스캔 PDF는 내용을 직접 붙여넣으세요.</p>
+      <p className="text-xs text-muted">PDF·HWP(5.x)·HWPX·DOCX·UTF-8 TXT, 파일당 3MB·추출 텍스트 20,000자까지 지원합니다. PDF는 20페이지 이하입니다. 원본 파일은 저장하지 않습니다. 암호·배포용 제한 문서와 스캔 이미지는 내용을 직접 붙여넣으세요. 구형 DOC는 DOCX로 저장해 주세요.</p>
       <label className="block text-sm">안내문 원문<Textarea aria-label="제출 안내문 원문" maxLength={20000} rows={8} value={text} disabled={busy} onChange={e => changeText(e.target.value)} /></label>
       <p className="text-right text-xs text-muted">{text.length.toLocaleString()} / 20,000자</p>
       {stale && <p role="status" className="rounded bg-amber-50 p-3 text-xs text-amber-900">현재 원문과 적용된 분석 결과가 다릅니다. 기존 목록은 유지되며, 재분석 후 결과를 적용해야 최신 안내문이 반영됩니다.</p>}
