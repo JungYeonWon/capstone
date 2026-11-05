@@ -13,7 +13,7 @@ from app.core.security import get_current_user, throttle
 from app.models import AuditLog, Contract, Document, Template, User, WorkspaceState
 from app.routers.contracts import get_owned
 from app.routers.documents import get_owned_doc
-from app.routers.templates import get_visible, to_out
+from app.routers.templates import get_visible, to_out, visible_templates
 from app.services import custom_plans as plans, document_workflow as flow
 
 router=APIRouter(tags=['document-workflow'])
@@ -75,7 +75,9 @@ def get_state(contract_id:int,slot:Slot,user:User=Depends(get_current_user),db:S
 @router.put('/contracts/{contract_id}/workspace/{slot}')
 def put_state(contract_id:int,slot:Slot,body:StateIn,user:User=Depends(get_current_user),db:Session=Depends(get_db)):
     slot_check(db,user,contract_id,slot)
-    if len(json.dumps(body.payload,ensure_ascii=False).encode())>160000:raise HTTPException(413,'임시 저장 용량을 초과했습니다.')
+    # Notices retain both the current and applied source plus bounded evidence.
+    limit=320000 if slot=='notice' else 160000
+    if len(json.dumps(body.payload,ensure_ascii=False).encode())>limit:raise HTTPException(413,'임시 저장 용량을 초과했습니다.')
     if slot=='notice' and body.payload:
         try: state=flow.NoticeState.model_validate(body.payload)
         except ValueError:raise HTTPException(422,'체크리스트 형식을 확인하세요.') from None
@@ -109,6 +111,22 @@ def notice_preview(contract_id:int,body:flow.NoticeIn,user:User=Depends(get_curr
     return flow.transfer({'notice':body.text})
 
 
+@router.get('/contracts/{contract_id}/notice/templates')
+def notice_templates(contract_id:int,title:Annotated[str,Field(min_length=1,max_length=100)],
+                     project_code:Annotated[str,Field(max_length=100)]='',user:User=Depends(get_current_user),db:Session=Depends(get_db)):
+    from app.services.library import recommendation
+    from app.services.notice_analysis import canonical, compact
+    contract=get_owned(db,user,contract_id)
+    matches=[]
+    for template in visible_templates(db,user):
+        rank=recommendation(template,contract.client_name,project_code)
+        if template.status!='ready' or rank is None:continue
+        names=[template.name,*(template.aliases or []),template.definition.get('library',{}).get('document_type','')]
+        if any(compact(canonical(title))==compact(canonical(name)) for name in names if name):
+            matches.append((rank[0],template.id,{'template':to_out(template),'reason':rank[1]}))
+    return [row[2] for row in sorted(matches,key=lambda row:row[:2])[:10]]
+
+
 @router.post('/contracts/{contract_id}/notice/analyze')
 def notice_analyze(contract_id:int,body:flow.NoticeIn,request:Request,user:User=Depends(get_current_user),db:Session=Depends(get_db)):
     get_owned(db,user,contract_id)
@@ -120,21 +138,29 @@ def notice_analyze(contract_id:int,body:flow.NoticeIn,request:Request,user:User=
 async def notice_extract(contract_id:int,file:UploadFile=File(...),user:User=Depends(get_current_user),db:Session=Depends(get_db)):
     get_owned(db,user,contract_id)
     data=await file.read(3*1024*1024+1)
-    if len(data)>3*1024*1024:raise HTTPException(413,'PDF는 3MB 이하여야 합니다.')
-    if not data.startswith(b'%PDF-'):raise HTTPException(422,'PDF 파일만 지원합니다.')
+    if len(data)>3*1024*1024:raise HTTPException(413,'안내문 파일은 3MB 이하여야 합니다.')
+    if not data.startswith(b'%PDF-'):
+        if not (file.filename or '').lower().endswith('.txt'):raise HTTPException(422,'텍스트 PDF 또는 UTF-8 TXT 파일을 사용하세요.')
+        try: text=data.decode('utf-8-sig').strip()
+        except UnicodeDecodeError:raise HTTPException(422,'TXT 파일은 UTF-8로 저장하거나 내용을 직접 붙여넣으세요.') from None
+        if '\x00' in text:raise HTTPException(422,'텍스트 파일을 읽을 수 없습니다.')
+        if len(text)>20000:raise HTTPException(413,'안내문 텍스트는 20,000자 이하여야 합니다.')
+        if len(text)<5:raise HTTPException(422,'안내문 내용은 5자 이상이어야 합니다.')
+        return {'text':text,'pages':None,'warning':''}
     try:
         import pymupdf
         with pymupdf.open(stream=data,filetype='pdf') as pdf:
-            if pdf.needs_pass or pdf.page_count>20:raise HTTPException(422,'암호 없는 20페이지 이하 PDF를 사용하세요.')
-            chunks=[]; size=0
+            if pdf.needs_pass or not 1<=pdf.page_count<=20:raise HTTPException(422,'암호 없는 1~20페이지 PDF를 사용하세요.')
+            chunks=[]; size=0; empty_pages=[]; pages=pdf.page_count
             for page in pdf:
-                text=page.get_text()
-                size+=len(text)
+                text=page.get_text(sort=True)
+                if not text.strip():empty_pages.append(page.number+1)
+                size+=len(text)+1
                 if size>20000:raise HTTPException(413,'안내문 텍스트는 20,000자 이하여야 합니다.')
                 chunks.append(text)
         text='\n'.join(chunks).strip()
         if len(text)<5:raise HTTPException(422,'텍스트를 읽을 수 없습니다. 스캔 PDF는 내용을 직접 붙여넣으세요.')
-        return {'text':text}
+        return {'text':text,'pages':pages,'warning':f"텍스트를 읽지 못한 페이지: {', '.join(map(str,empty_pages))}. 해당 페이지의 내용을 직접 보완하세요." if empty_pages else ''}
     except HTTPException:raise
     except Exception:raise HTTPException(422,'PDF를 읽을 수 없습니다.') from None
 

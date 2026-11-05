@@ -134,6 +134,21 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(result['mode'],'rule_fallback');self.assertTrue(result['warning'])
         self.assertEqual(self.get(f"/api/v1/documents/{doc['id']}").json()['values'],doc['values'])
 
+    def test_body_structured_response_uses_section_keys_and_rejects_other_fields(self):
+        from app.services.document_workflow import BodyResponse
+        doc=self.create();path=f"/api/v1/documents/{doc['id']}/draft"
+        response={'values':[{'key':'work_method','text':'확인된 절차로 점검합니다.'},
+                            {'key':'수행 방법','text':'wrong label'},
+                            {'key':'staff_plan','text':'fabricated table'},
+                            {'key':'seal_image','text':'forbidden'}]}
+        with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value=response) as ai:
+            preview=self.post(path+'/preview',{}).json()
+            result=self.post(path+'/suggest',{'use_ai':True,'consent_digest':preview['consent_digest']}).json()
+            self.assertEqual(result['mode'],'ai')
+            self.assertIs(ai.call_args.kwargs['response_model'],BodyResponse)
+            self.assertEqual(result['values']['work_method'],'[검토용 제안] 확인된 절차로 점검합니다.')
+            for key in ('수행 방법','staff_plan','seal_image'):self.assertNotIn(key,result['values'])
+
     def test_report_results_and_pledge_obligations_stay_blank_without_user_answers(self):
         for kind in ('report','pledge'):
             doc=self.create(kind)
@@ -195,6 +210,46 @@ class WorkflowTests(unittest.TestCase):
         added=self.post(self.base+'/documents',{'template_id':new['id']})
         self.assertEqual(added.status_code,200,added.text)
         self.assertNotIn('수정한 수행 방법',str(self.get(f"/api/v1/documents/{doc['id']}").json()['values']))
+
+    def test_notice_facts_persist_and_changed_source_requires_reanalysis(self):
+        source='제출서류: 착수계\n제출기한: 계약 후 7일 이내\n제출방법: 이메일 접수'
+        result=self.post(self.base+'/notice/analyze',{'text':source}).json()
+        payload={'text':source,'analyzed_text':source,'items':result['items'],'facts':result['facts']}
+        for item in payload['items']:item['done']=True
+        self.assertEqual(self.put(self.base+'/workspace/notice',{'payload':payload,'revision':0}).status_code,200)
+        self.assertEqual(self.get(self.base+'/workspace/notice').json()['payload']['facts'],result['facts'])
+        types=lambda:[i['type'] for i in self.post(self.base+'/validate').json()['issues']]
+        self.assertNotIn('안내문 재분석 필요',types())
+        payload['text']+='\n추가 안내: 산출내역서 제출'
+        self.assertEqual(self.put(self.base+'/workspace/notice',{'payload':payload,'revision':1}).status_code,200)
+        self.assertIn('안내문 재분석 필요',types())
+        self.assertFalse(self.post(self.base+'/validate').json()['summary']['ready_for_submission'])
+
+
+    def test_notice_template_matching_is_local_and_issuer_scoped(self):
+        template=Template(kind='builtin',name='착수계',aliases=['착수신고서'],definition={},status='ready')
+        self.db.add(template)
+        other=Template(kind='uploaded',name='착수계',definition={'library':{'scope':'organization','organization':'다른 기관'}},status='ready')
+        self.db.add(other);self.db.commit()
+        with patch('app.services.ai._chat_json') as ai:
+            result=self.get(self.base+'/notice/templates?title=착수신고서')
+            ai.assert_not_called()
+        self.assertEqual(result.status_code,200,result.text)
+        ids=[m['template']['id'] for m in result.json()]
+        self.assertIn(template.id,ids);self.assertNotIn(other.id,ids)
+        self.assertEqual(self.get(self.base+'/notice/templates?title=착수계',1).status_code,404)
+
+    def test_notice_txt_and_partial_scan_pdf_report_extraction_limits(self):
+        path=self.base+'/notice/extract'
+        source='제출서류: 착수계\n제출기한: 계약 후 7일 이내'
+        result=self.client.post(path,headers=self.headers[0],files={'file':('notice.txt',source.encode('utf-8-sig'),'text/plain')})
+        self.assertEqual(result.status_code,200,result.text);self.assertEqual(result.json()['text'],source)
+        invalid=self.client.post(path,headers=self.headers[0],files={'file':('notice.txt',b'\xff\xfe\x00','text/plain')})
+        self.assertEqual(invalid.status_code,422)
+        pdf=pymupdf.open();pdf.new_page().insert_text((72,72),'Submission documents: start report');pdf.new_page()
+        result=self.client.post(path,headers=self.headers[0],files={'file':('notice.pdf',pdf.tobytes(),'application/pdf')});pdf.close()
+        self.assertEqual(result.status_code,200,result.text);self.assertEqual(result.json()['pages'],2)
+        self.assertIn('2',result.json()['warning'])
 
     def test_submission_detects_review_markers_partial_tables_and_malformed_rows(self):
         doc=self.create();values={'work_method':'[검토용 제안] 확인할 문구','staff_plan':'가상담당 | | 점검'}

@@ -125,6 +125,10 @@ def validate_contract(contract_id: int, with_ai: bool = False, user: User = Depe
     checklist=db.get(WorkspaceState,(c.id,'notice'))
     if checklist and checklist.payload:
         state=NoticeState.model_validate(checklist.payload)
+        if (state.text.strip() or state.analyzed_text) and state.text != state.analyzed_text:
+            result['issues'].append({'severity':'warning','type':'안내문 재분석 필요',
+                'field_key':None,'field_label':None,'message':'안내문 원문과 적용된 분석 결과가 다릅니다. 안내문을 분석하고 결과를 적용하세요.',
+                'document_ids':[],'document_titles':[]})
         for item in state.items:
             linked=next((d for d in docs if d.id==item.document_id),None)
             if not item.done or (item.document_id and not linked):
@@ -141,7 +145,7 @@ def validate_contract(contract_id: int, with_ai: bool = False, user: User = Depe
                     'document_ids':[linked.id],'document_titles':[linked.title]})
     errors=sum(i['severity']=='error' for i in result['issues'])
     result['summary'].update(errors=errors,warnings=len(result['issues'])-errors,passed=errors==0)
-    outstanding={'검토 필요 문구','표 빈칸','임시 저장 미반영','체크리스트 미완료'}
+    outstanding={'검토 필요 문구','표 빈칸','임시 저장 미반영','체크리스트 미완료','안내문 재분석 필요'}
     result['summary']['ready_for_submission']=bool(docs) and errors==0 and not any(i['type'] in outstanding for i in result['issues'])
     result["ai_comments"] = []
     if with_ai:

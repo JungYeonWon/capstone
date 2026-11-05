@@ -34,7 +34,7 @@ function Row({ t, badge, adding, onAdd }: { t: Template; badge?: ReactNode; addi
   );
 }
 
-export default function AddDocumentPanel({ contractId, clientName, onAdd }: { contractId: number; clientName: string; onAdd: (templateId: number, projectCode?: string) => Promise<void> }) {
+export default function AddDocumentPanel({ contractId, clientName, onAdd, onDocumentsChanged, onChecklistChanged }: { contractId: number; clientName: string; onAdd: (templateId: number, projectCode?: string) => Promise<void>; onDocumentsChanged: () => Promise<void>; onChecklistChanged: () => void }) {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("search");
   const [q, setQ] = useState("");
   const [projectCode, setProjectCode] = useState("");
@@ -143,7 +143,7 @@ export default function AddDocumentPanel({ contractId, clientName, onAdd }: { co
         )}
 
         <div hidden={tab !== "custom"}><CustomPlanBuilder key={`builder-${contractId}`} contractId={contractId} /></div>
-        <div hidden={tab !== "notice"}><NoticeChecklist key={`notice-${contractId}`} contractId={contractId} active={tab === "notice"} /></div>
+        <div hidden={tab !== "notice"}><NoticeChecklist key={`notice-${contractId}`} contractId={contractId} active={tab === "notice"} onDocumentsChanged={onDocumentsChanged} onChecklistChanged={onChecklistChanged} /></div>
       </div>
     </Card>
   );

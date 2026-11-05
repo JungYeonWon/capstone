@@ -167,7 +167,7 @@ export default function ContractWorkspace() {
         </div>
 
         <div className="space-y-5">
-          <AddDocumentPanel contractId={cid} clientName={contract.client_name} onAdd={addDocument} />
+          <AddDocumentPanel contractId={cid} clientName={contract.client_name} onAdd={addDocument} onDocumentsChanged={async () => { setResult(null); await loadDocs(); }} onChecklistChanged={() => setResult(null)} />
 
           <Card>
             <CardHeader title="검토 · 제출" />
