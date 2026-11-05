@@ -8,6 +8,7 @@ import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import { useWorkspaceDraft } from "@/lib/useWorkspaceDraft";
 import type { CustomPlanLayout, CustomPlanSection, Doc } from "@/lib/types";
 import { Badge, Button, ErrorText, Input, Textarea } from "@/components/ui";
+import LayoutReviewDialog from "./LayoutReviewDialog";
 
 type Transfer = { provider: string; ai_available: boolean; payload_preview: string; consent_digest: string };
 type Proposal = { layout: CustomPlanLayout; mode: string; warning: string; matches: { id: number; name: string; reason: string; project_code: string }[] };
@@ -29,6 +30,7 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
   const [ack, setAck] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [editorOpen, setEditorOpen] = useState(false);
   const markSaved = useUnsavedChanges(request.trim().length > 0 && draft.pending);
 
   const prepare = async () => {
@@ -43,7 +45,7 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
       const result = await api.post<Proposal>(`/contracts/${contractId}/custom-plan/propose`, {
         request, title, purpose, document_type: "free", project_code: projectCode, use_ai: useAi, consent_digest: useAi && consent ? transfer?.consent_digest : "",
       });
-      draft.setValue(previous => ({ ...previous, proposal: result, layout: result.layout })); setAck(false);
+      draft.setValue(previous => ({ ...previous, proposal: result, layout: result.layout })); setAck(false); setEditorOpen(true);
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -98,6 +100,16 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
       </div>}
       <Button loading={busy} disabled={!canPropose || (useAi && (!transfer?.ai_available || !consent))} onClick={propose}>{useAi ? "AI로 자유 양식 구성하기" : "빈 양식 직접 구성하기"}</Button>
     </> : <>
+      <div className="space-y-3 rounded-xl border border-line bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="break-words text-sm font-semibold">{layout.title}</p><p className="mt-1 text-xs text-muted">{layout.sections.length}개 항목 · 표 {layout.sections.filter(section => section.kind === "table").length}개</p></div><Badge tone="indigo">구성 준비됨</Badge></div>
+        <p className="text-xs text-muted">팝업에서 항목을 편집하고 초안을 작성하세요. 닫아도 편집 내용은 임시 저장됩니다.</p>
+        <div className="flex flex-wrap gap-2"><Button disabled={busy} onClick={() => setEditorOpen(true)}>구성 확인·수정</Button><Button variant="secondary" disabled={busy} onClick={() => { setLayout(null); setAck(false); }}>요청 다시 수정</Button></div>
+      </div>
+      {editorOpen && <LayoutReviewDialog busy={busy} onClose={() => setEditorOpen(false)} footer={<>
+        <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={ack} disabled={busy} className="mt-0.5" onChange={e => setAck(e.target.checked)} />구성을 확인했으며, 발주처 지정 서식이 아닌 검토용 초안임을 이해했습니다.</label>
+        <div className="flex flex-wrap items-center justify-between gap-2"><span role="status" className="text-xs text-muted">{draft.status}</span><div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy} onClick={() => setEditorOpen(false)}>닫기</Button><Button loading={busy} disabled={!ack || !layout.title.trim() || layout.sections.some(section => !section.label.trim())} onClick={create}>확정하고 초안 작성</Button></div></div>
+      </>}>
+      <ErrorText>{error || draft.error}</ErrorText>
       <div className="flex flex-wrap items-center gap-2"><Badge>{proposal?.mode === "ai" ? "AI 자유 양식 구성" : "직접 편집할 기본 구성"}</Badge><Badge tone="amber">검토용 초안 · 지정 서식 아님</Badge></div>
       {proposal?.warning && <p role="status" className="text-xs text-amber-700">{proposal.warning}</p>}
       {proposal && proposal.matches.length > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
@@ -107,7 +119,7 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
       <label htmlFor={`${uid}-title`} className="block text-sm font-medium">서류·양식 제목</label>
       <Input id={`${uid}-title`} value={layout.title} maxLength={100} disabled={busy} onChange={e => edit({ ...layout, title: e.target.value })} />
       <p className="text-xs text-muted">계약명·발주처·회사·기간·책임자 표가 함께 들어갑니다. 항목명, 순서, 본문/표 형식과 필수 여부를 확인하세요.</p>
-      <ol className="space-y-3">
+      <ol className="grid gap-3 sm:grid-cols-2">
         {layout.sections.map((section, index) => <li key={section.key} className="space-y-2 rounded-lg border border-line p-3">
           <label htmlFor={`${uid}-${section.key}`} className="block text-xs font-medium">{index + 1}. 항목명</label>
           <Input id={`${uid}-${section.key}`} value={section.label} maxLength={60} disabled={busy} onChange={e => editSection(index, { label: e.target.value })} />
@@ -126,8 +138,7 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
         if (key) edit({ ...layout, sections: [...layout.sections, { key, label: "추가 항목", kind: "text", columns: [], required: true }] });
       }}>항목 추가</Button>
       <p className="text-xs text-muted">확정하면 내 양식에 저장되어 다른 계약에서도 사용할 수 있습니다. 다음 화면의 본문 작성 도우미에서 필요한 정보를 답하고 AI 본문을 제안받을 수 있습니다. 확인되지 않은 사실은 빈칸으로 남깁니다.</p>
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={ack} disabled={busy} className="mt-1" onChange={e => setAck(e.target.checked)} />구성을 확인했으며, 발주처 지정 서식이 아닌 검토용 초안임을 이해했습니다.</label>
-      <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy} onClick={() => { setLayout(null); setAck(false); }}>요청 다시 수정</Button><Button loading={busy} disabled={!ack || !layout.title.trim() || layout.sections.some(section => !section.label.trim())} onClick={create}>확정하고 초안 작성</Button></div>
+      </LayoutReviewDialog>}
     </>}</>}
   </div>;
 }
