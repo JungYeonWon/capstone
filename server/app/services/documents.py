@@ -51,13 +51,15 @@ def sync_contract_values(doc: Document, previous: dict, current: dict) -> bool:
     """Refresh contract-derived values while retaining document-specific edits."""
     related = {
         "contract_title", "client_name", "amount", "amount_korean", "supply_amount", "vat",
-        "contract_date", "start_date", "end_date", "period", "description",
+        "contract_date", "start_date", "end_date", "period", "description", "work_summary",
         "payment_amount", "payment_amount_korean", "usage_purpose", "quote_items",
         "detail_items", "completion_details", "activity_topic", "activity_details",
     }
     values = dict(doc.values or {})
     changed = False
     for key in related.intersection(template_keys(doc.template)):
+        if doc.template.kind=='custom' and key=='description' and doc.template.definition['custom_plan']['layout'].get('document_type') in ('report','pledge'):
+            continue
         if doc.template.kind == 'custom' and any(section['key'] == key and section['kind'] == 'table' for section in doc.template.definition['custom_plan']['layout']['sections']):
             continue
         existing = values.get(key, "")

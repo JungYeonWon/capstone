@@ -6,6 +6,7 @@
 
 import re
 from datetime import date
+from fastapi import HTTPException
 
 from app.standard_fields import CONSISTENCY_FIELDS, field_label, korean_amount
 
@@ -83,6 +84,21 @@ def validate(documents: list, master: dict) -> dict:
             unmapped = [f["label"] for f in d.template.fields if not f.get("field_key")]
             if unmapped:
                 issues.append(_issue("warning", "미매핑", f"표준 항목과 연결되지 않은 칸 {len(unmapped)}개: {', '.join(unmapped[:5])}", [d]))
+
+        for key in keys:
+            text=str(v.get(key,'') or '')
+            if any(marker in text for marker in ('[검토용 제안]','[작성 필요]','[확인 필요]','TODO','미정')):
+                issues.append(_issue('warning','검토 필요 문구','검토용 제안 또는 미확정 문구가 남아 있습니다. 근거를 확인하고 문구를 확정하세요.',[d],key))
+        if d.template.kind=='custom':
+            from app.services.professional_renderer import data_table_rows
+            for section in d.template.definition['custom_plan']['layout']['sections']:
+                if section['kind']=='table' and str(v.get(section['key'],'')).replace('|','').strip():
+                    try:
+                        rows=data_table_rows(section,v)
+                        if any(any(str(cell).strip() for cell in row) and not all(str(cell).strip() for cell in row) for row in rows):
+                            issues.append(_issue('warning','표 빈칸',f"'{section['label']}' 표의 일부 칸이 비어 있습니다.",[d],section['key']))
+                    except (ValueError, HTTPException):
+                        issues.append(_issue('error','표 형식',f"'{section['label']}' 표의 열 수 또는 행 수를 확인하세요.",[d],section['key']))
 
         s, e = _date(v.get("start_date")), _date(v.get("end_date"))
         if "start_date" in keys and "end_date" in keys and s and e and s > e:

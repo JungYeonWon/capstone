@@ -120,6 +120,29 @@ def validate_contract(contract_id: int, with_ai: bool = False, user: User = Depe
     docs = sorted(c.documents, key=lambda d: d.id)
     master = base_values(get_or_create_company(db, user), c)
     result = validate(docs, master)
+    from app.models import WorkspaceState
+    from app.services.document_workflow import NoticeState
+    checklist=db.get(WorkspaceState,(c.id,'notice'))
+    if checklist and checklist.payload:
+        state=NoticeState.model_validate(checklist.payload)
+        for item in state.items:
+            linked=next((d for d in docs if d.id==item.document_id),None)
+            if not item.done or (item.document_id and not linked):
+                result['issues'].append({'severity':'error' if item.required else 'warning','type':'체크리스트 미완료',
+                    'field_key':None,'field_label':None,'message':f"제출서류 '{item.title}'의 준비 여부를 확인하세요.",
+                    'document_ids':[linked.id] if linked else [],'document_titles':[linked.title] if linked else []})
+    pending=db.scalars(select(WorkspaceState).where(WorkspaceState.contract_id==c.id,WorkspaceState.slot.like('document_%'))).all()
+    for state in pending:
+        if state.payload.get('values'):
+            linked=next((d for d in docs if state.slot==f'document_{d.id}'),None)
+            if linked and state.payload['values']!=linked.values:
+                result['issues'].append({'severity':'warning','type':'임시 저장 미반영','field_key':None,'field_label':None,
+                    'message':'편집기의 임시 저장 내용이 출력 문서에 아직 반영되지 않았습니다. 편집 화면에서 저장하세요.',
+                    'document_ids':[linked.id],'document_titles':[linked.title]})
+    errors=sum(i['severity']=='error' for i in result['issues'])
+    result['summary'].update(errors=errors,warnings=len(result['issues'])-errors,passed=errors==0)
+    outstanding={'검토 필요 문구','표 빈칸','임시 저장 미반영','체크리스트 미완료'}
+    result['summary']['ready_for_submission']=bool(docs) and errors==0 and not any(i['type'] in outstanding for i in result['issues'])
     result["ai_comments"] = []
     if with_ai:
         for d in docs:
@@ -128,7 +151,7 @@ def validate_contract(contract_id: int, with_ai: bool = False, user: User = Depe
                 result["ai_comments"].append({"document_id": d.id, "title": d.title, "comments": comments})
         db.add(AuditLog(user_id=user.id, action="ai_send", detail=f"문장 검토 {len(docs)}건 (계약 {c.id}, 마스킹 후 전송)"))
     for d in docs:
-        has_error = any(d.id in i["document_ids"] and i["severity"] == "error" for i in result["issues"])
+        has_error = any(d.id in i["document_ids"] and (i["severity"] == "error" or i['type'] in outstanding) for i in result["issues"])
         d.status = "draft" if has_error else "reviewed"
     db.commit()
     return result

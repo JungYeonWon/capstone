@@ -85,7 +85,7 @@ export default function ContractWorkspace() {
   if (error && !contract) return <ErrorText>{error}</ErrorText>;
   if (!contract) return <Loading />;
 
-  const step = docs.length === 0 ? 0 : result?.summary.passed ? 4 : result ? 3 : 2;
+  const step = docs.length === 0 ? 0 : result?.summary.ready_for_submission ? 4 : result ? 3 : 2;
 
   return (
     <>
@@ -179,8 +179,8 @@ export default function ContractWorkspace() {
                   <span className="block text-xs text-muted">마스킹 후 필요한 텍스트만 전송 (API 키 설정 시)</span>
                 </span>
               </label>
-              <Button className="w-full" onClick={runValidate} loading={validating} disabled={docs.length === 0}>
-                AI 검토 실행 (누락·오류·불일치)
+              <Button className="w-full" onClick={runValidate} loading={validating}>
+                제출 전 통합 점검 실행
               </Button>
               <div className="grid grid-cols-2 gap-2">
                 <Button variant="secondary" onClick={() => exportZip("native")} loading={exporting} disabled={docs.length === 0}>

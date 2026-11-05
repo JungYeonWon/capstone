@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine, get_db
 from app.core.security import get_current_user
 from app.models import AuditLog, Template, User
-from app.routers import auth, company, contracts, documents, templates, privacy, custom_plans, account_security
+from app.routers import auth, company, contracts, documents, templates, privacy, custom_plans, account_security, document_workflow
 from app.services.source_storage import TemporaryFilesMiddleware, remove
 
 logging.basicConfig(level=logging.INFO)
@@ -122,7 +122,7 @@ app.add_middleware(TemporaryFilesMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Content-Type", "X-CSRF-Token", "X-Sensitive-Grant"], expose_headers=["Content-Disposition", "X-Reauthentication-Scope"])
 
 API = "/api/v1"
-for r in (auth.router, company.router, contracts.router, documents.router, templates.router, privacy.router, custom_plans.router, account_security.router):
+for r in (auth.router, company.router, contracts.router, documents.router, templates.router, privacy.router, custom_plans.router, account_security.router, document_workflow.router):
     app.include_router(r, prefix=API)
 
 
@@ -139,7 +139,7 @@ async def security_headers(request, call_next):
 def maintenance(db):
     from sqlalchemy import delete
     from datetime import timedelta
-    from app.models import AuthSession, AuthThrottle, SensitiveGrant, MfaChallenge, MfaCredential
+    from app.models import AuthSession, AuthThrottle, SensitiveGrant, MfaChallenge, MfaCredential, WorkspaceState
     now = datetime.utcnow()
     count = purge_expired_uploads(db)
     db.execute(delete(SensitiveGrant).where(SensitiveGrant.expires_at < now))
@@ -149,6 +149,7 @@ def maintenance(db):
     db.execute(delete(AuthThrottle).where(AuthThrottle.window_start < now - timedelta(days=1)))
     db.execute(delete(MfaChallenge).where(MfaChallenge.expires_at < now))
     db.execute(delete(MfaCredential).where(MfaCredential.enabled == 0, MfaCredential.pending_expires < now))
+    db.execute(delete(WorkspaceState).where(WorkspaceState.slot!='notice',WorkspaceState.updated_at < now-timedelta(days=30)))
     # Crash recovery: only generated temp files in the upload root, never originals in user folders.
     for path in settings.UPLOAD_DIR.glob("tmp*"):
         import time

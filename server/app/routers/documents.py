@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import get_current_user, require_sensitive
-from app.models import AuditLog, Document, User
+from app.models import AuditLog, Document, User, WorkspaceState
 from app.routers.company import get_or_create_company
 from app.schemas import DocumentUpdate
 from app.services import ai, renderer
@@ -48,7 +48,10 @@ def update_document(document_id: int, body: DocumentUpdate, user: User = Depends
 
 @router.delete("/{document_id}")
 def delete_document(document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db.delete(get_owned_doc(db, user, document_id))
+    doc=get_owned_doc(db,user,document_id)
+    from sqlalchemy import delete
+    db.execute(delete(WorkspaceState).where(WorkspaceState.contract_id==doc.contract_id,WorkspaceState.slot.in_([f'document_{doc.id}',f'answers_{doc.id}'])))
+    db.delete(doc)
     db.commit()
     return {"ok": True}
 

@@ -43,10 +43,11 @@ export type TemplateField = {
 };
 
 export type CustomPlanSection = { key: string; label: string; kind: "text" | "table"; columns: string[]; required: boolean };
-export type CustomPlanLayout = { title: string; sections: CustomPlanSection[] };
+export type DocumentType = "work_plan" | "proposal" | "report" | "pledge";
+export type CustomPlanLayout = { title: string; sections: CustomPlanSection[]; document_type?: DocumentType };
 
 export type Template = {
-  custom_plan?: { layout: CustomPlanLayout; request: string; reference: string; unofficial: boolean } | null;
+  custom_plan?: { layout: CustomPlanLayout; request: string; reference: string; unofficial: boolean; version?: number; root_id?: number; parent_id?: number; version_note?: string } | null;
   owner_id: number | null;
   library: LibraryMetadata;
   id: number;
@@ -104,7 +105,7 @@ export type Issue = {
 };
 
 export type ValidationResult = {
-  summary: { documents: number; errors: number; warnings: number; passed: boolean };
+  summary: { documents: number; errors: number; warnings: number; passed: boolean; ready_for_submission?: boolean };
   issues: Issue[];
   ai_comments: { document_id: number; title: string; comments: string[] }[];
 };

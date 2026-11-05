@@ -5,30 +5,34 @@ import { useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
-import type { CustomPlanLayout, CustomPlanSection, Doc } from "@/lib/types";
+import { useWorkspaceDraft } from "@/lib/useWorkspaceDraft";
+import type { CustomPlanLayout, CustomPlanSection, Doc, DocumentType } from "@/lib/types";
 import { Badge, Button, ErrorText, Input, Textarea } from "@/components/ui";
 
 type Transfer = { provider: string; ai_available: boolean; payload_preview: string; consent_digest: string };
 type Proposal = { layout: CustomPlanLayout; mode: string; warning: string; matches: { id: number; name: string; reason: string; project_code: string }[] };
+type BuilderDraft = { request: string; projectCode: string; layout: CustomPlanLayout | null; proposal: Proposal | null; documentType: DocumentType };
+const EMPTY: BuilderDraft = { request: "", projectCode: "", layout: null, proposal: null, documentType: "work_plan" };
 
 export default function CustomPlanBuilder({ contractId }: { contractId: number }) {
   const router = useRouter();
   const uid = useId();
-  const [request, setRequest] = useState("");
-  const [projectCode, setProjectCode] = useState("");
+  const draft = useWorkspaceDraft<BuilderDraft>(contractId, "builder", EMPTY);
+  const { request, projectCode, layout, proposal, documentType } = draft.value;
+  const setRequest = (request: string) => draft.setValue(previous => ({ ...previous, request }));
+  const setProjectCode = (projectCode: string) => draft.setValue(previous => ({ ...previous, projectCode }));
+  const setLayout = (layout: CustomPlanLayout | null) => draft.setValue(previous => ({ ...previous, layout }));
   const [useAi, setUseAi] = useState(false);
   const [transfer, setTransfer] = useState<Transfer | null>(null);
   const [consent, setConsent] = useState(false);
-  const [proposal, setProposal] = useState<Proposal | null>(null);
-  const [layout, setLayout] = useState<CustomPlanLayout | null>(null);
   const [ack, setAck] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const markSaved = useUnsavedChanges(request.trim().length > 0);
+  const markSaved = useUnsavedChanges(request.trim().length > 0 && draft.pending);
 
   const prepare = async () => {
     setBusy(true); setError(""); setConsent(false);
-    try { setTransfer(await api.post<Transfer>(`/contracts/${contractId}/custom-plan/transmission`, { request })); }
+    try { setTransfer(await api.post<Transfer>(`/contracts/${contractId}/custom-plan/transmission`, { request, document_type: documentType })); }
     catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -36,9 +40,9 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
     setBusy(true); setError("");
     try {
       const result = await api.post<Proposal>(`/contracts/${contractId}/custom-plan/propose`, {
-        request, project_code: projectCode, use_ai: useAi, consent_digest: useAi && consent ? transfer?.consent_digest : "",
+        request, document_type: documentType, project_code: projectCode, use_ai: useAi, consent_digest: useAi && consent ? transfer?.consent_digest : "",
       });
-      setProposal(result); setLayout(result.layout); setAck(false);
+      draft.setValue(previous => ({ ...previous, proposal: result, layout: result.layout })); setAck(false);
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -57,16 +61,23 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
     setBusy(true); setError("");
     try {
       const result = await api.post<{ document: Doc }>(`/contracts/${contractId}/custom-plan`, { request, layout, acknowledge_unofficial: ack });
+      try { await draft.replace(EMPTY); } catch { /* The document already exists; navigate to it even if draft cleanup fails. */ }
       markSaved(); router.push(`/contracts/${contractId}/documents/${result.document.id}`);
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
 
   return <div className="space-y-4">
-    <div><Badge tone="indigo">과업수행계획서</Badge><h3 className="mt-2 font-semibold">맞춤 서류 초안 만들기</h3>
+    <div><Badge tone="indigo">맞춤 서류</Badge><h3 className="mt-2 font-semibold">맞춤 서류 초안 만들기</h3>
       <p className="mt-1 text-xs leading-relaxed text-muted">요청 → 구성 확인·수정 → 초안 작성 순서입니다. 담당자·일정·산출물 등 확인되지 않은 사실은 빈칸으로 남깁니다.</p></div>
     <ErrorText>{error}</ErrorText>
+    <ErrorText>{draft.error}</ErrorText>
+    <p role="status" className="text-xs text-muted">{draft.status} · 회사 자료는 암호화하여 서버에 저장합니다.</p>
+    {!draft.ready ? <p className="text-sm">초안을 불러오는 중입니다.</p> : <>
     {!layout ? <>
+      <label className="block text-sm">서류 종류<select aria-label="맞춤 서류 종류" className="mt-1 w-full rounded-lg border border-line p-2" value={documentType} disabled={busy} onChange={e => { draft.setValue(previous => ({ ...previous, documentType: e.target.value as DocumentType })); setTransfer(null); setConsent(false); }}>
+        <option value="work_plan">과업수행계획서</option><option value="proposal">제안서</option><option value="report">보고서</option><option value="pledge">확약서</option>
+      </select></label>
       <label htmlFor={`${uid}-request`} className="block text-sm font-medium">어떤 구성이 필요한가요?</label>
       <Textarea id={`${uid}-request`} rows={5} maxLength={2000} disabled={busy} value={request} placeholder="예: 참여인력표와 주간 추진 일정, 산출물 목록을 포함한 과업수행계획서를 만들어줘" onChange={e => { setRequest(e.target.value); setTransfer(null); setConsent(false); }} />
       <label htmlFor={`${uid}-code`} className="block text-xs text-muted">공고·사업번호 (지정 양식 확인용, 선택)</label>
@@ -115,6 +126,6 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
       <p className="text-xs text-muted">서비스 공통 구성만 참고합니다. 확정하면 내 양식으로 저장되어 다른 계약에서도 다시 사용할 수 있습니다. 본문은 확인된 정보와 검토용 공통 문구로 작성합니다.</p>
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={ack} disabled={busy} className="mt-1" onChange={e => setAck(e.target.checked)} />구성을 확인했으며, 발주처 지정 서식이 아닌 검토용 초안임을 이해했습니다.</label>
       <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy} onClick={() => { setLayout(null); setAck(false); }}>요청 다시 수정</Button><Button loading={busy} disabled={!ack || !layout.title.trim() || layout.sections.some(section => !section.label.trim())} onClick={create}>확정하고 초안 작성</Button></div>
-    </>}
+    </>}</>}
   </div>;
 }

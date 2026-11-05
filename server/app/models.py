@@ -60,6 +60,7 @@ class Contract(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     documents: Mapped[list["Document"]] = relationship(back_populates="contract", cascade="all, delete-orphan")
+    workspace_states: Mapped[list["WorkspaceState"]] = relationship(cascade="all, delete-orphan")
     user: Mapped[User] = relationship()
 
 
@@ -183,3 +184,12 @@ class MfaChallenge(Base):
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class WorkspaceState(Base):
+    __tablename__ = 'workspace_states'
+    contract_id: Mapped[int] = mapped_column(ForeignKey('contracts.id', ondelete='CASCADE'), primary_key=True)
+    slot: Mapped[str] = mapped_column(String(40), primary_key=True)
+    payload: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

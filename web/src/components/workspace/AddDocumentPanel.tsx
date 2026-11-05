@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import type { Template } from "@/lib/types";
 import { Badge, Button, Card, ErrorText, Input, Spinner } from "@/components/ui";
 import CustomPlanBuilder from "./CustomPlanBuilder";
+import NoticeChecklist from "./NoticeChecklist";
 import { PastNoticeBadge } from "@/components/TemplateExtras";
 
 type SearchRes = { results: { template: Template; score: number; ai: boolean; reason: string }[]; ai_enabled: boolean };
@@ -14,7 +15,7 @@ const TABS = [
   { id: "search", label: "서류 검색", sub: "CASE 1 · 기본 양식" },
   { id: "upload", label: "자체 양식", sub: "CASE 2 · 업로드" },
   { id: "custom", label: "맞춤 초안", sub: "CASE 3 · 구성 만들기" },
-  { id: "notice", label: "안내문 분석", sub: "예정" },
+  { id: "notice", label: "안내문 분석", sub: "제출 체크리스트" },
 ] as const;
 
 function Row({ t, badge, adding, onAdd }: { t: Template; badge?: ReactNode; adding: boolean; onAdd: () => void }) {
@@ -141,14 +142,8 @@ export default function AddDocumentPanel({ contractId, clientName, onAdd }: { co
           </>
         )}
 
-        <div hidden={tab !== "custom"}><CustomPlanBuilder contractId={contractId} /></div>
-        {tab === "notice" && (
-          <div className="py-6 text-center text-sm text-muted">
-            <p className="font-medium text-foreground">제출서류 안내문 AI 분석</p>
-            <p className="mb-3 mt-1">안내문(PDF)을 올리면 필요한 서류 목록을 뽑아 체크리스트를 만드는 기능입니다.</p>
-            <Badge tone="amber">다음 단계 개발 예정</Badge>
-          </div>
-        )}
+        <div hidden={tab !== "custom"}><CustomPlanBuilder key={`builder-${contractId}`} contractId={contractId} /></div>
+        <div hidden={tab !== "notice"}><NoticeChecklist key={`notice-${contractId}`} contractId={contractId} active={tab === "notice"} /></div>
       </div>
     </Card>
   );

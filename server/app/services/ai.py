@@ -25,7 +25,7 @@ def _norm(s: str) -> str:
 def _client():
     from openai import OpenAI
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    return OpenAI(api_key=settings.OPENAI_API_KEY, timeout=35, max_retries=0)
 
 
 def _chat_json(system: str, user: str, *, response_model=None) -> dict | None:
@@ -38,6 +38,8 @@ def _chat_json(system: str, user: str, *, response_model=None) -> dict | None:
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 response_format=response_model,
                 temperature=0,
+                max_completion_tokens=3000,
+                store=False,
             )
             parsed = res.choices[0].message.parsed
             return parsed.model_dump() if parsed is not None else None
@@ -46,6 +48,8 @@ def _chat_json(system: str, user: str, *, response_model=None) -> dict | None:
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             response_format={"type": "json_object"},
             temperature=0,
+            max_completion_tokens=3000,
+            store=False,
         )
         return json.loads(res.choices[0].message.content or "{}")
     except Exception as e:  # 네트워크·키 오류 시 규칙 기반으로 폴백

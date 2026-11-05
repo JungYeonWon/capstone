@@ -9,10 +9,11 @@ export default function ValidationPanel({ result, contractId }: { result: Valida
   return (
     <Card>
       <CardHeader
-        title="AI 검토 결과"
+        title="제출 전 통합 점검"
         desc={`서류 ${summary.documents}건 · 오류 ${summary.errors} · 주의 ${summary.warnings}`}
-        action={summary.passed ? <Badge tone="green">제출 가능</Badge> : <Badge tone="red">수정 필요</Badge>}
+        action={summary.ready_for_submission ? <Badge tone="green">자동 점검 통과 · 제출 조건 별도 확인</Badge> : <Badge tone="amber">확인·수정 필요</Badge>}
       />
+      <p className="px-5 py-3 text-xs text-muted">필수값·금액·기간·서류 간 불일치·미확정 문구·표 빈칸·체크리스트와 임시 저장을 함께 확인합니다. 발주처 승인이나 실제 제출 완료를 의미하지 않습니다.</p>
       {issues.length === 0 && ai_comments.length === 0 ? (
         <div className="px-5 py-8 text-center text-sm text-emerald-700">누락·오류·서류 간 불일치가 없습니다 ✓</div>
       ) : (

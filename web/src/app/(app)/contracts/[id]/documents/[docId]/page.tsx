@@ -7,6 +7,9 @@ import { useQueryParam, useStandardFields } from "@/lib/hooks";
 import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import type { Doc, Template } from "@/lib/types";
 import { Badge, Button, Card, CardHeader, ErrorText, Field, Input, Loading, PageHeader, Textarea } from "@/components/ui";
+import TableFieldEditor from "@/components/TableFieldEditor";
+import DraftAssistant from "@/components/workspace/DraftAssistant";
+import DocumentDraftBuffer from "@/components/workspace/DocumentDraftBuffer";
 
 const LONG_FIELDS = new Set([
   "attachment_list",
@@ -64,9 +67,10 @@ export default function DocumentEditor() {
     api.get<Doc>(`/documents/${docId}`).then((d) => {
       setDoc(d);
       setValues(d.values);
-      api.get<Template>(`/templates/${d.template_id}`).then(setTemplate);
+      setTemplate(null);
+      api.get<Template>(`/templates/${d.template_id}`).then(setTemplate).catch(e => setError(e.message));
       loadPreview();
-    });
+    }).catch(e => setError(e.message));
   }, [docId, loadPreview]);
 
   useEffect(() => {
@@ -126,7 +130,7 @@ export default function DocumentEditor() {
     }
   };
 
-  if (!doc) return <Loading />;
+  if (!doc || String(doc.id) !== docId) return error ? <ErrorText>{error}</ErrorText> : <Loading />;
 
   const nativeLabel = doc.output_format === "xlsx" ? "Excel" : doc.output_format === "hwpx" ? "한글(HWPX)" : doc.output_format === "pdf" ? "원본 PDF" : "Word";
   const nativeExt = doc.output_format;
@@ -150,10 +154,10 @@ export default function DocumentEditor() {
         }
         action={
           <>
-            <Button variant="secondary" onClick={() => api.download(`/documents/${docId}/download?format=native`, `${doc.title}.${nativeExt}`)}>
+            <Button variant="secondary" disabled={Boolean(dirty)} onClick={() => api.download(`/documents/${docId}/download?format=native`, `${doc.title}.${nativeExt}`)}>
               {nativeLabel}
             </Button>
-            <Button variant="secondary" onClick={() => api.download(`/documents/${docId}/download?format=pdf`, `${doc.title}.pdf`)}>
+            <Button variant="secondary" disabled={Boolean(dirty)} onClick={() => api.download(`/documents/${docId}/download?format=pdf`, `${doc.title}.pdf`)}>
               PDF
             </Button>
           </>
@@ -185,7 +189,7 @@ export default function DocumentEditor() {
                   hint={missing ? "필수 항목이 비어 있습니다" : table ? `한 줄에 한 행씩 입력하세요: ${section.columns.join(" | ")}` : FIELD_HINT[k] ?? DERIVED_HINT[k]}
                 >
                   <div className={`rounded-lg ${focus === k ? "ring-2 ring-amber-400 ring-offset-2" : ""}`}>
-                    {(LONG_FIELDS.has(k) || k.startsWith("custom_") || table) ? (
+                    {table ? <TableFieldEditor id={`f-${k}`} columns={section.columns} value={values[k] ?? ""} disabled={saving || Boolean(busy)} onChange={text => setValues(previous => ({ ...previous, [k]: text }))} /> : (LONG_FIELDS.has(k) || k.startsWith("custom_")) ? (
                       <Textarea id={`f-${k}`} rows={4} value={values[k] ?? ""} onChange={(e) => setValues({ ...values, [k]: e.target.value })} />
                     ) : (
                       <Input
@@ -219,6 +223,8 @@ export default function DocumentEditor() {
         </Card>
 
         <div className="min-w-0">
+          <DocumentDraftBuffer key={doc.id} doc={doc} values={values} onRestore={setValues} />
+          {template && doc.template_kind === "custom" && <DraftAssistant key={`assistant-${doc.id}`} doc={doc} template={template} values={values} onApply={(key, text) => setValues(previous => ({ ...previous, [key]: text }))} />}
           <div className="mb-2 flex items-center justify-between text-[13px] text-muted">
             <span>미리보기 (저장된 내용 기준)</span>
             {doc.template_kind === "uploaded" && template?.source_type === "pdf" && <span>{doc.output_format === "pdf" ? "원본 PDF의 검토된 입력 위치에 값을 채웁니다" : "PDF 양식은 분석된 항목으로 Word 문서를 재구성합니다"}</span>}
