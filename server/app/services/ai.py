@@ -9,6 +9,8 @@ import logging
 import re
 from difflib import SequenceMatcher
 
+from openai import OpenAIError
+
 from app.core.config import settings
 from app.services.masking import mask_text
 from app.standard_fields import STANDARD_FIELDS
@@ -28,7 +30,7 @@ def _client():
     return OpenAI(api_key=settings.OPENAI_API_KEY, timeout=35, max_retries=0)
 
 
-def _chat_json(system: str, user: str, *, response_model=None) -> dict | None:
+def _chat_json(system: str, user: str, *, response_model=None, raise_provider_errors=False) -> dict | None:
     if not settings.ai_enabled:
         return None
     try:
@@ -53,6 +55,9 @@ def _chat_json(system: str, user: str, *, response_model=None) -> dict | None:
         )
         return json.loads(res.choices[0].message.content or "{}")
     except Exception as e:  # 네트워크·키 오류 시 규칙 기반으로 폴백
+        if raise_provider_errors and isinstance(e, OpenAIError):
+            log.warning("LLM 호출 실패: %s", type(e).__name__)
+            raise
         log.warning("LLM 호출 실패, 규칙 기반으로 대체: %s", type(e).__name__)
         return None
 

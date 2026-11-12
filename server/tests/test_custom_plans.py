@@ -8,6 +8,8 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 import pymupdf
+import httpx
+from openai import AuthenticationError
 from PIL import Image
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -244,6 +246,22 @@ class CustomPlanTests(unittest.TestCase):
             self.assertEqual(result.json()['findings'][0]['evidence'][1]['page'], 1)
             self.client.put(doc_path, headers=headers, json={'values': {'custom_2': '검수 후 10일 이내 잔금을 지급합니다.'}})
             self.assertEqual(self.client.post(base + '/analyze', headers=headers, json=consent).status_code, 400)
+
+    def test_contract_review_reports_provider_auth_failure_without_provider_message(self):
+        base = f'/api/v1/contracts/{self.contract.id}/clause-review'
+        body = {'role': 'supplier', 'files': [{'name': 'terms.txt', 'parts': [{'text': '검수 완료 후 잔금을 지급합니다.'}]}]}
+        headers = self.headers[0]
+        provider_error = AuthenticationError('private provider diagnostic',
+            response=httpx.Response(401, request=httpx.Request('POST', 'https://api.openai.com/v1/chat/completions')),
+            body={'code': 'invalid_api_key'})
+        with patch.object(settings, 'OPENAI_API_KEY', 'test-only'), patch('app.services.ai._client') as client:
+            client.return_value.beta.chat.completions.parse.side_effect = provider_error
+            preview = self.client.post(base + '/preview', headers=headers, json=body).json()
+            result = self.client.post(base + '/analyze', headers=headers,
+                                      json={**body, 'consent_digest': preview['consent_digest']})
+        self.assertEqual(result.status_code, 503)
+        self.assertIn('OpenAI API 키', result.json()['detail'])
+        self.assertNotIn('private provider diagnostic', result.text)
 
     def test_free_form_seal_requires_preview_version_and_is_excluded_from_zip(self):
         layout = custom_plans.local_layout(self.request, 'free', '개발 용역 계약서').model_dump()
