@@ -88,6 +88,7 @@ export type Doc = {
   values: Record<string, string>;
   status: "draft" | "reviewed";
   template_kind: "builtin" | "uploaded" | "custom";
+  requires_seal_approval: boolean;
   output_format: "hwpx" | "xlsx" | "docx" | "pdf";
   field_keys: string[];
   missing: string[];

@@ -1,6 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useQueryParam, useStandardFields } from "@/lib/hooks";
@@ -43,6 +44,8 @@ export default function DocumentEditor() {
   const [pages, setPages] = useState<{ data: string; width: number; height: number }[]>([]);
   const [previewLoading, setPreviewLoading] = useState(true);
   const [previewError, setPreviewError] = useState("");
+  const [sealVersion, setSealVersion] = useState<string | null>(null);
+  const [sealing, setSealing] = useState(false);
   const focus = useQueryParam("focus");
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -52,9 +55,11 @@ export default function DocumentEditor() {
   const loadPreview = useCallback(async () => {
     setPreviewLoading(true);
     setPreviewError("");
+    setSealVersion(null);
     try {
-      const result = await api.get<{ pages: { data: string; width: number; height: number }[] }>(`/documents/${docId}/preview-pages`);
+      const result = await api.get<{ pages: { data: string; width: number; height: number }[]; seal_version: string | null }>(`/documents/${docId}/preview-pages`);
       setPages(result.pages);
+      setSealVersion(result.seal_version);
     } catch (e) {
       setPages([]);
       setPreviewError((e as Error).message);
@@ -141,6 +146,20 @@ export default function DocumentEditor() {
   };
   const completed = doc.field_keys.filter(filled).length;
 
+  const downloadWithSeal = async () => {
+    if (!sealVersion || !confirm("미리보기의 최종본을 확인했습니다. 이 버전에 회사 인감을 적용할까요?")) return;
+    setSealing(true);
+    setError("");
+    try {
+      await api.download(`/documents/${docId}/download?format=native&seal_version=${sealVersion}`, `${doc.title}.${nativeExt}`);
+    } catch (e) {
+      setError((e as Error).message);
+      await loadPreview();
+    } finally {
+      setSealing(false);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -165,6 +184,12 @@ export default function DocumentEditor() {
       />
 
       {doc.template_kind === "custom" && <p className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">검토용 맞춤 초안입니다. 담당자·일정·산출물의 빈칸과 제안 문구를 확인하고, 제출 전 발주처 지정 서식 여부를 확인하세요.</p>}
+      {doc.template_kind !== "builtin" && <div className="mb-4 flex flex-wrap items-center gap-3">
+        {dirty ? <span className="text-sm text-muted">저장한 뒤 체결용 계약서를 AI로 검토할 수 있습니다.</span> : <Link
+          href={`/contracts/${id}/review?document=${docId}`} className="text-sm font-medium text-primary underline">체결용 계약서 AI 검토</Link>}
+        {sealVersion && <Button variant="secondary" loading={sealing} disabled={Boolean(dirty) || saving || previewLoading || pages.length === 0}
+          onClick={downloadWithSeal}>이 버전에 인감 적용 · 한글 다운로드</Button>}
+      </div>}
       <div className="grid min-w-0 gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
         <Card className="min-w-0 self-start">
           <CardHeader

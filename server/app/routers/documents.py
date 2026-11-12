@@ -1,16 +1,18 @@
+from hmac import compare_digest
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.render_security import approved_custom_document
 from app.core.security import get_current_user, require_sensitive
 from app.models import AuditLog, Document, User, WorkspaceState
 from app.routers.company import get_or_create_company
 from app.schemas import DocumentUpdate
 from app.services import ai, renderer
-from app.services.documents import auto_values, build_docx, build_native, build_pdf, preview_html, safe_filename, template_keys, to_out
+from app.services.documents import auto_values, build_docx, build_native, build_pdf, custom_seal_version, preview_html, safe_filename, template_keys, to_out, uses_default_seal
 from app.services.pdf_forms import positioned
 from app.standard_fields import base_values, korean_amount
 
@@ -91,15 +93,32 @@ def preview(document_id: int, user: User = Depends(get_current_user), db: Sessio
 def preview_pages(document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = get_owned_doc(db, user, document_id)
     pdf = build_pdf(d)
-    return {"pages": renderer.pdf_preview_pages(pdf)}
+    return {"pages": renderer.pdf_preview_pages(pdf), "seal_version": custom_seal_version(d, user.company)}
 
 
 @router.get("/{document_id}/download")
-def download(document_id: int, request: Request, format: str = "native", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def download(document_id: int, request: Request, format: str = "native",
+             seal_version: str | None = Query(default=None, pattern=r"^[0-9a-f]{64}$"),
+             user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = get_owned_doc(db, user, document_id)
-    if d.template.kind in ("builtin", "custom") and user.company and user.company.seal_image:
+    if seal_version:
+        current_version = custom_seal_version(d, user.company)
+        if current_version is None or not compare_digest(current_version, seal_version):
+            raise HTTPException(409, "문서나 인감이 변경되었습니다. 미리보기를 다시 열어 확인하세요.")
+        require_sensitive(request, db, user, f"document:{d.id}:seal:{seal_version}")
+    elif uses_default_seal(d) and user.company and user.company.seal_image:
         require_sensitive(request, db, user, f"document:{d.id}:download")
     name = safe_filename(f"{d.contract.contract_title}_{d.title}")
+    token = approved_custom_document.set(d.id if seal_version else None)
+    try:
+        data, media, ext = download_content(d, format)
+    finally:
+        approved_custom_document.reset(token)
+    db.add(AuditLog(user_id=user.id, action="document_download", detail=f"document:{d.id}")); db.commit()
+    return Response(data, media_type=media, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name + '.' + ext)}"})
+
+
+def download_content(d: Document, format: str):
     if format == "pdf":
         data, media, ext = build_pdf(d), "application/pdf", "pdf"
     elif format == "native":
@@ -111,6 +130,5 @@ def download(document_id: int, request: Request, format: str = "native", user: U
         data, media, ext = renderer.docx_bytes(docx), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"
     else:
         raise HTTPException(400, "format은 native, pdf 또는 docx")
-    db.add(AuditLog(user_id=user.id, action="document_download", detail=f"document:{d.id}")); db.commit()
-    return Response(data, media_type=media, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name + '.' + ext)}"})
+    return data, media, ext
 

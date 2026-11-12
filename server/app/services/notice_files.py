@@ -158,7 +158,7 @@ def hwp_text(data):
         return '\n'.join(chunks)
 
 
-def extract_notice(data, filename):
+def extract_notice(data, filename, include_pages=False):
     if len(data)>MAX_FILE:fail('안내문 파일은 3MB 이하여야 합니다.',413)
     extension=PurePath(filename or '').suffix.lower()
     if extension=='.doc':fail('구형 Word DOC는 DOCX로 저장한 뒤 올려주세요.')
@@ -186,6 +186,9 @@ def extract_notice(data, filename):
             text=hwp_text(data);warning=OFFICE_WARNING
         else:
             text=zip_text(data,extension);warning=OFFICE_WARNING
-        return {'text':checked_text(text),'pages':pages,'warning':warning,'file_type':extension[1:]}
+        result = {'text':checked_text(text),'pages':pages,'warning':warning,'file_type':extension[1:]}
+        if include_pages and extension == '.pdf':
+            result['page_texts'] = chunks
+        return result
     except HTTPException:raise
     except Exception:fail('문서를 읽을 수 없습니다. 파일 형식·손상·암호 설정을 확인하세요.')

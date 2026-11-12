@@ -68,6 +68,7 @@ export default function MailModal({ onClose, contractId, docs }: { onClose: () =
                 </label>
               ))}
             </div>
+            {docs.some(doc => selected.includes(doc.id) && doc.requires_seal_approval) && <p className="mt-2 text-xs text-muted">선택한 AI 자유 양식은 인감 없는 파일로 첨부됩니다.</p>}
           </div>
           <div className="flex gap-3 text-sm">
             {FORMATS.map((f) => (

@@ -136,6 +136,15 @@ def reauthenticate(body: ReauthenticateIn, request: Request, user: User = Depend
         obj = db.get(Document if kind == 'document' else Contract, int(id_))
         owner = obj.contract.user_id if obj and kind == 'document' else obj.user_id if obj else None
         valid = owner == user.id and action in ({'download'} if kind == 'document' else {'export', 'mail'})
+    seal_match = re.fullmatch(r'document:(\d+):seal:([0-9a-f]{64})', body.scope)
+    if seal_match:
+        from app.services.documents import custom_seal_version
+        doc_id, version = seal_match.groups()
+        doc = db.get(Document, int(doc_id))
+        if doc and doc.contract.user_id == user.id:
+            if custom_seal_version(doc, user.company) != version:
+                raise HTTPException(409, '문서나 인감이 변경되었습니다. 미리보기를 다시 열어 확인하세요.')
+            valid = True
     if not valid:
         raise HTTPException(404, '허용되지 않은 작업입니다.')
     raw = secrets.token_urlsafe(32)

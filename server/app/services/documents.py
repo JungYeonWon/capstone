@@ -1,5 +1,8 @@
 """서류 인스턴스 관련 공통 로직: 값 자동 채우기, 파일 생성, 응답 변환."""
 
+import hashlib
+import hmac
+import json
 import re
 from pathlib import Path
 
@@ -129,10 +132,33 @@ def build_native(doc: Document) -> tuple[bytes, str, str]:
     )
 
 
+def requires_seal_approval(doc: Document) -> bool:
+    return (doc.template.kind == "custom"
+            and doc.template.definition.get("custom_plan", {}).get("layout", {}).get("document_type") == "free")
+
+
+def uses_default_seal(doc: Document) -> bool:
+    return doc.template.kind in ("builtin", "custom") and not requires_seal_approval(doc)
+
+
 def document_seal(doc: Document):
-    from app.core.render_security import seal_authorized
+    from app.core.render_security import approved_custom_document, seal_authorized
     from app.services.seal import company_seal
+    if requires_seal_approval(doc) and approved_custom_document.get() != doc.id:
+        return None
     return company_seal(doc.contract.user.company) if doc.contract and seal_authorized.get() else None
+
+
+def custom_seal_version(doc: Document, company: Company | None) -> str | None:
+    if not requires_seal_approval(doc) or not company or not company.seal_image:
+        return None
+    snapshot = {
+        "document_id": doc.id, "title": doc.title, "definition": doc.template.definition,
+        "values": doc.values, "seal": hashlib.sha256(company.seal_image.encode()).hexdigest(),
+        "seal_size_mm": company.seal_size_mm,
+    }
+    encoded = json.dumps(snapshot, sort_keys=True, ensure_ascii=False).encode()
+    return hmac.new(settings.SECRET_KEY.encode(), encoded, hashlib.sha256).hexdigest()
 
 
 def build_pdf(doc: Document) -> bytes:
@@ -180,6 +206,7 @@ def to_out(doc: Document) -> dict:
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
         "template_kind": doc.template.kind,
+        "requires_seal_approval": requires_seal_approval(doc),
         "output_format": output_format(doc.template),
         "field_keys": keys,
         "missing": [k for k in required if not has_value(doc.template, k, (doc.values or {}).get(k))],

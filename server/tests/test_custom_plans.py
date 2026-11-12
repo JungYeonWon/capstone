@@ -200,6 +200,80 @@ class CustomPlanTests(unittest.TestCase):
         self.assertEqual(doc['values']['work_summary'],'')
         self.assertEqual(doc['values']['contract_title'],'수정 계약')
 
+    def test_contract_review_binds_consent_and_verifies_cross_document_quotes(self):
+        layout = custom_plans.local_layout(self.request, 'free', '개발 용역 계약서').model_dump()
+        doc_id = self.create(layout)['document']['id']
+        doc_path = f'/api/v1/documents/{doc_id}'
+        headers = self.headers[0]
+        self.client.put(doc_path, headers=headers, json={'values': {'custom_2': '검수 완료 후 잔금을 지급합니다.'}})
+        base = f'/api/v1/contracts/{self.contract.id}/clause-review'
+        pdf = pymupdf.open()
+        pdf.new_page().insert_text((60, 60), 'All requested changes are included without limits.')
+        pdf.new_page()
+        raw = pdf.tobytes()
+        pdf.close()
+        upload = self.client.post(base + '/extract', headers=headers,
+                                  files={'file': ('terms.pdf', raw, 'application/pdf')})
+        self.assertEqual(upload.status_code, 200, upload.text)
+        file = upload.json()
+        self.assertIn('2', file.pop('warning'))
+        body = {'role': 'supplier', 'document_id': doc_id, 'files': [file, {
+            'name': '연락처.txt', 'parts': [{'text': '담당자 이메일 private@example.invalid'}],
+        }]}
+        self.assertEqual(self.client.post(base + '/preview', headers=self.headers[1], json=body).status_code, 404)
+        with patch.object(settings, 'OPENAI_API_KEY', 'test-only'), patch('app.services.ai._chat_json') as ai:
+            preview = self.client.post(base + '/preview', headers=headers, json=body)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            payload = preview.json()['payload_preview']
+            self.assertNotIn('private@example.invalid', payload)
+            sources = json.loads(payload)['sources']
+            self.assertIn('검수 완료 후 잔금을 지급합니다.', sources[0]['text'])
+            finding = {'category': '검수·대금 지급', 'title': '잔금 지급 지연', 'impact': '수정이 계속되면 검수가 늦어질 수 있습니다.',
+                       'question': '검수 기한을 정할 수 있을까요?', 'evidence': [
+                           {'source_id': sources[0]['source_id'], 'quote': '검수 완료 후 잔금을 지급합니다.'},
+                           {'source_id': sources[1]['source_id'], 'quote': 'All requested changes are included without limits.'},
+                       ]}
+            ai.return_value = {'findings': [finding, {**finding, 'evidence': [{'source_id': 1, 'quote': '원문에 존재하지 않는 무상 변경 조항'}]}]}
+            consent = {**body, 'consent_digest': preview.json()['consent_digest']}
+            self.assertEqual(self.client.post(base + '/analyze', headers=headers, json={**consent, 'role': 'client'}).status_code, 400)
+            ai.assert_not_called()
+            result = self.client.post(base + '/analyze', headers=headers, json=consent)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(ai.call_args.args[1], payload)
+            self.assertEqual(result.json()['excluded'], 1)
+            self.assertEqual(result.json()['findings'][0]['evidence'][1]['page'], 1)
+            self.client.put(doc_path, headers=headers, json={'values': {'custom_2': '검수 후 10일 이내 잔금을 지급합니다.'}})
+            self.assertEqual(self.client.post(base + '/analyze', headers=headers, json=consent).status_code, 400)
+
+    def test_free_form_seal_requires_preview_version_and_is_excluded_from_zip(self):
+        layout = custom_plans.local_layout(self.request, 'free', '개발 용역 계약서').model_dump()
+        doc_id = self.create(layout)['document']['id']
+        path = f'/api/v1/documents/{doc_id}'
+        image = io.BytesIO()
+        Image.new('RGBA', (60, 60), (180, 0, 0, 100)).save(image, format='PNG')
+        self.users[0].company.seal_image = normalize_seal(image.getvalue())
+        self.db.commit()
+        headers = self.headers[0]
+        unsigned = self.client.get(path + '/download', headers=headers)
+        self.assertEqual(unsigned.status_code, 200)
+        with ZipFile(io.BytesIO(unsigned.content)) as archive:
+            self.assertNotIn('BinData/companySeal.png', archive.namelist())
+        bundle = self.client.get(f'/api/v1/contracts/{self.contract.id}/export', headers=headers)
+        self.assertEqual(bundle.status_code, 200)
+        with ZipFile(io.BytesIO(bundle.content)) as archive:
+            with ZipFile(io.BytesIO(archive.read(archive.namelist()[0]))) as hwpx:
+                self.assertNotIn('BinData/companySeal.png', hwpx.namelist())
+        version = self.client.get(path + '/preview-pages', headers=headers).json()['seal_version']
+        signed_path = path + '/download?seal_version=' + version
+        self.assertEqual(self.client.get(signed_path, headers=headers).status_code, 403)
+        grant = approve(self.client, headers, f'document:{doc_id}:seal:{version}')
+        signed = self.client.get(signed_path, headers=grant)
+        self.assertEqual(signed.status_code, 200)
+        with ZipFile(io.BytesIO(signed.content)) as archive:
+            self.assertIn('BinData/companySeal.png', archive.namelist())
+        self.client.put(path, headers=headers, json={'values': {'custom_2': '승인 뒤 변경된 본문'}})
+        self.assertEqual(self.client.get(signed_path, headers=headers).status_code, 409)
+
     def test_free_layout_uses_arbitrary_title_sections_and_tables_with_bound_consent(self):
         body={'title':'행사 안전관리계획서','purpose':'발주처에 안전 대응 절차 설명',
               'request':'위험요소별 대응표와 비상 연락망을 포함해 주세요.'}

@@ -119,6 +119,11 @@ export default function ContractWorkspace() {
 
       <ErrorText>{error}</ErrorText>
 
+      <Card className="mb-5">
+        <CardHeader title="AI 계약서 검토" desc="상대방이 보낸 계약서·별첨이나 AI로 작성한 계약서의 조건을 검토합니다."
+          action={<Button variant="secondary" onClick={() => router.push(`/contracts/${cid}/review`)}>계약서 검토하기</Button>} />
+      </Card>
+
       <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_360px]">
         <div className="space-y-5">
           <Card>
@@ -193,6 +198,7 @@ export default function ContractWorkspace() {
               <Button variant="secondary" className="w-full" onClick={() => setMailOpen(true)} disabled={docs.length === 0}>
                 메일 제출
               </Button>
+              {docs.some(doc => doc.requires_seal_approval) && <p className="text-xs text-muted">AI 자유 양식의 ZIP·메일 첨부는 인감 없는 파일로 생성됩니다. 날인본은 각 문서의 미리보기에서 인감을 적용해 받으세요.</p>}
               {result && !result.summary.passed && <p className="text-xs text-red-500">검토에서 오류가 발견되었습니다. 수정 후 다시 검토하세요.</p>}
             </div>
           </Card>

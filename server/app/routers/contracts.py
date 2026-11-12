@@ -14,7 +14,7 @@ from app.routers.company import get_or_create_company
 from app.routers.templates import get_visible
 from app.schemas import ContractIn, DocumentCreate, MailIn
 from app.services import ai, renderer
-from app.services.documents import auto_values, build_native, build_pdf, review_text, safe_filename, sync_contract_values, to_out
+from app.services.documents import auto_values, build_native, build_pdf, review_text, safe_filename, sync_contract_values, to_out, uses_default_seal
 from app.services.mailer import send_mail
 from app.services.library import recommendation, scope
 from app.services.validator import validate
@@ -179,7 +179,7 @@ def export_zip(contract_id: int, request: Request, format: str = "native", user:
     docs = sorted(c.documents, key=lambda d: d.id)
     if not docs:
         raise HTTPException(400, "작성된 서류가 없습니다.")
-    if user.company and user.company.seal_image and any(d.template.kind in ("builtin", "custom") for d in docs):
+    if user.company and user.company.seal_image and any(uses_default_seal(d) for d in docs):
         require_sensitive(request, db, user, f"contract:{c.id}:export")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -197,7 +197,7 @@ def mail_documents(contract_id: int, body: MailIn, request: Request, user: User 
     docs = [d for d in sorted(c.documents, key=lambda d: d.id) if d.id in set(body.document_ids)]
     if not docs:
         raise HTTPException(400, "보낼 서류를 선택하세요.")
-    if user.company and user.company.seal_image and any(d.template.kind in ("builtin", "custom") for d in docs):
+    if user.company and user.company.seal_image and any(uses_default_seal(d) for d in docs):
         require_sensitive(request, db, user, f"contract:{c.id}:mail")
     company = get_or_create_company(db, user)
     subject = body.subject or f"[{company.company_name or '제출'}] {c.contract_title} 관련 서류 제출"
