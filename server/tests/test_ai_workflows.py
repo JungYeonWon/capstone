@@ -104,6 +104,14 @@ class AIWorkflowTests(unittest.TestCase):
         item.evidence = []
         with self.assertRaises(ValueError): flow.validate_result('change', result, sources)
 
+    def test_provider_schema_requires_evidence_for_change_and_meeting_items(self):
+        sources = [{'source_id': 1, 'kind': 'input', 'text': '추가 통계 화면에 대해 협의합니다.'}]
+        for mode in ('change', 'meeting'):
+            response = provider_result(mode, sources)
+            response['items'][0]['evidence'] = []
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                flow.RESPONSES[mode].model_validate(response)
+
     def test_changed_request_and_changed_reference_require_fresh_consent(self):
         with patch.object(settings, 'OPENAI_API_KEY', 'test-only'), patch('app.services.ai._chat_json') as mock:
             body = self.body(); preview = self.post('/change/preview', body).json()

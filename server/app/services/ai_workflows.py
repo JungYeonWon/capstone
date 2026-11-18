@@ -69,6 +69,10 @@ class WorkflowItem(Strict):
     evidence: list[Citation] = Field(max_length=3)
 
 
+class GroundedWorkflowItem(WorkflowItem):
+    evidence: list[Citation] = Field(min_length=1, max_length=3)
+
+
 class Question(Strict):
     question: str = Field(min_length=1, max_length=300)
     reason: str = Field(min_length=1, max_length=300)
@@ -117,6 +121,7 @@ class MeetingDrafts(Strict):
 
 
 class ChangeResponse(Analysis):
+    items: list[GroundedWorkflowItem] = Field(max_length=24)
     drafts: ChangeDrafts
 
 
@@ -125,6 +130,7 @@ class RequirementsResponse(Analysis):
 
 
 class MeetingResponse(Analysis):
+    items: list[GroundedWorkflowItem] = Field(max_length=24)
     drafts: MeetingDrafts
 
 
