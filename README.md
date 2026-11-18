@@ -4,6 +4,8 @@
 
 > 서류 요청 → AI 분석 → 자동 작성 → 검토·다운로드
 
+계약서 검토 결과는 암호화 이력으로 저장하고 처리 상태·메모, 질문 모아 복사, PDF 보고서, 수정본 원문 비교로 후속 협의를 관리합니다. 배포 전 `docs/review-history-schema.sql` 적용이 필요합니다. [검토 이력 사용 안내](docs/contract-review-followup.md)
+
 ## 실행
 
 ```bash

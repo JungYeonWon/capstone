@@ -244,7 +244,13 @@ class CustomPlanTests(unittest.TestCase):
             self.assertEqual(ai.call_args.args[1], payload)
             self.assertEqual(result.json()['excluded'], 1)
             self.assertEqual(result.json()['findings'][0]['evidence'][1]['page'], 1)
+            self.assertEqual(result.json()['document_state'],'current')
             self.client.put(doc_path, headers=headers, json={'values': {'custom_2': '검수 후 10일 이내 잔금을 지급합니다.'}})
+            stored=self.client.get(base+f"/history/{result.json()['id']}",headers=headers).json()
+            self.assertEqual(stored['document_state'],'changed')
+            updated=self.client.put(base+f"/history/{stored['id']}/findings/0",headers=headers,json={'status':'asking','note':'수정본 확인 중','revision':stored['revision']})
+            self.assertEqual(updated.json()['document_state'],'changed')
+            self.assertEqual(updated.json()['findings'][0]['evidence'][0]['quote'],'검수 완료 후 잔금을 지급합니다.')
             self.assertEqual(self.client.post(base + '/analyze', headers=headers, json=consent).status_code, 400)
 
     def test_contract_review_reports_provider_auth_failure_without_provider_message(self):

@@ -3,10 +3,14 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Badge, Button, Card, ErrorText, PageHeader, Textarea } from "@/components/ui";
+import { Button, Card, ErrorText, PageHeader, Textarea } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useQueryParam } from "@/lib/hooks";
 import type { Doc } from "@/lib/types";
+import { questionText, reviewDate, type ReviewRecord, type ReviewSummary, type ReviewEdit } from "@/lib/review-history";
+import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
+import ReviewResultPanel from "@/components/workspace/ReviewResultPanel";
+import ReviewComparison from "@/components/workspace/ReviewComparison";
 
 type ReviewFile = {
   name: string;
@@ -14,14 +18,6 @@ type ReviewFile = {
   warning: string;
 };
 type Transmission = { payload_preview: string; consent_digest: string; ai_available: boolean; warning: string };
-type Finding = {
-  category: string;
-  title: string;
-  impact: string;
-  question: string;
-  evidence: { name: string; page: number | null; quote: string }[];
-};
-type Result = { findings: Finding[]; excluded: number };
 
 export default function ContractReviewPage() {
   const { id } = useParams<{ id: string }>();
@@ -32,7 +28,14 @@ export default function ContractReviewPage() {
   const [files, setFiles] = useState<ReviewFile[]>([]);
   const [transmission, setTransmission] = useState<Transmission | null>(null);
   const [consent, setConsent] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
+  const [result, setResult] = useState<ReviewRecord | null>(null);
+  const [history, setHistory] = useState<ReviewSummary[]>([]);
+  const [edits, setEdits] = useState<Record<number, ReviewEdit>>({});
+  const [copyFallback, setCopyFallback] = useState("");
+  const [message, setMessage] = useState("");
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const [inputVersion, setInputVersion] = useState(0);
+  useUnsavedChanges(Object.keys(edits).length > 0);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [unreadFiles, setUnreadFiles] = useState<string[]>([]);
@@ -47,10 +50,47 @@ export default function ContractReviewPage() {
     return () => { active = false; };
   }, [id]);
 
+  async function refreshHistory() { setHistory(await api.get<ReviewSummary[]>(`${base}/history`)); }
+  useEffect(() => {
+    let alive = true;
+    api.get<ReviewSummary[]>(`${base}/history`).then(items => { if (alive) setHistory(items); }).catch(e => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [base]);
+  const currentBody = { role, document_id: docId ? Number(docId) : null, files: files.map(({ name, parts, warning }) => ({ name, parts, warning })) };
+  const currentFiles = [...(docId ? [{ name: docs.find(d => String(d.id) === docId)?.title || "저장 문서" }] : []), ...files].map((f, i) => ({ key: String(i + 1), name: f.name }));
+  async function loadReview(reviewId: number) {
+    if (Object.keys(edits).length) { setError("미저장 상태·메모를 저장하거나 입력을 취소한 뒤 이력을 여세요."); return; }
+    setBusy("검토 이력 불러오는 중"); setError("");
+    try { setResult(await api.get<ReviewRecord>(`${base}/history/${reviewId}`)); setCopyFallback(""); setMessage(""); }
+    catch (e) { setError((e as Error).message); } finally { setBusy(""); }
+  }
+  async function saveFinding(index: number) {
+    if (!result || !edits[index]) return;
+    setBusy("처리 기록 저장 중"); setError("");
+    try {
+      const next = await api.put<ReviewRecord>(`${base}/history/${result.id}/findings/${index}`, { ...edits[index], revision: result.revision });
+      setResult(next); setEdits(previous => { const next = { ...previous }; delete next[index]; return next; });
+      setCopyFallback(""); setMessage("처리 상태와 메모를 저장했습니다."); await refreshHistory();
+    } catch (e) { setError((e as Error).message); } finally { setBusy(""); }
+  }
+  async function copyQuestions(all: boolean) {
+    if (!result) return;
+    const text = questionText(result, all);
+    if (!text) { setMessage("복사할 질문이 없습니다."); setCopyFallback(""); return; }
+    setCopyFallback(text);
+    try { await navigator.clipboard.writeText(text); setMessage("질문을 복사했습니다."); }
+    catch { setMessage("자동 복사가 허용되지 않았습니다. 질문 모음에서 직접 선택해 복사하세요."); }
+  }
+  async function downloadReport() {
+    if (!result) return;
+    setBusy("보고서 준비 중"); setError("");
+    try { await api.download(`${base}/history/${result.id}/pdf`, `contract-review-${result.id}.pdf`); }
+    catch (e) { setError((e as Error).message); } finally { setBusy(""); }
+  }
   function invalidateReview() {
+    setInputVersion(previous => previous + 1);
     setTransmission(null);
     setConsent(false);
-    setResult(null);
     setError("");
   }
 
@@ -80,22 +120,19 @@ export default function ContractReviewPage() {
   }
 
   async function run(action: "preview" | "analyze") {
+    if (Object.keys(edits).length) { setError("미저장 상태·메모를 먼저 저장하거나 입력을 취소하세요."); return; }
     setBusy(action === "preview" ? "전송 내용 준비 중" : "계약 조항 검토 중");
     setError("");
-    const body = {
-      role,
-      document_id: docId ? Number(docId) : null,
-      files: files.map(({ name, parts }) => ({ name, parts })),
-    };
+    const body = currentBody;
     try {
       if (action === "preview") {
         setConsent(false);
-        setResult(null);
         setTransmission(null);
         setTransmission(await api.post<Transmission>(`${base}/preview`, body));
       } else {
-        setResult(null);
-        setResult(await api.post<Result>(`${base}/analyze`, { ...body, consent_digest: transmission?.consent_digest }));
+        const saved = await api.post<ReviewRecord>(`${base}/analyze`, { ...body, consent_digest: transmission?.consent_digest });
+        setResult(saved); setEdits({}); setCopyFallback(""); setConsent(false);
+        setMessage("검토 결과가 암호화 저장됐습니다. 이력에서 다시 열 수 있습니다."); await refreshHistory();
       }
     } catch (e) {
       setError((e as Error).message);
@@ -107,6 +144,22 @@ export default function ContractReviewPage() {
   return <>
     <PageHeader back={{ href: `/contracts/${id}`, label: "계약으로 돌아가기" }} title="AI 계약서 검토"
       desc="체결할 계약서와 별첨에서 확인이 필요한 조건을 찾습니다." />
+    <Card className="mb-5 space-y-3 p-4">
+      <h2 className="font-semibold">저장된 검토 이력 ({history.length}/50)</h2>
+      <p className="text-xs text-muted">검토 당시 전송 텍스트·원문 인용·결과를 암호화 보관합니다. 계약 삭제·내 데이터 삭제 시 함께 삭제됩니다.</p>
+      <ErrorText>{error}</ErrorText>{message && <p role="status" className="text-sm text-primary">{message}</p>}
+      {!!Object.keys(edits).length && <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => setEdits({})}>미저장 상태·메모 입력 취소</Button>}
+      {!history.length && <p className="text-xs text-muted">아직 저장된 검토가 없습니다. 새 검토를 실행하면 자동 저장됩니다.</p>}
+      <ul className="max-h-64 space-y-2 overflow-y-auto">{history.map(row => <li key={row.id} className="flex flex-wrap items-center gap-2 rounded border border-line p-2">
+        <Button size="sm" variant={result?.id === row.id ? "primary" : "secondary"} disabled={!!busy} onClick={() => void loadReview(row.id)}>#{row.id} · {reviewDate(row.created_at)}</Button>
+        <span className="break-words text-xs">{row.role === "supplier" ? "수행사" : "발주처"} · {row.source_files.map(f => f.name).join(", ")} · 처리 {row.resolved_count}/{row.finding_count}</span>
+        {deleting === row.id ? <><span className="text-xs">이 이력을 삭제할까요? 복구할 수 없습니다.</span><Button size="sm" variant="danger" disabled={!!busy || !!Object.keys(edits).length} onClick={async () => {
+          setBusy("이력 삭제 중"); setError("");
+          try { await api.del(`${base}/history/${row.id}`); if (result?.id === row.id) { setResult(null); setCopyFallback(""); } setDeleting(null); await refreshHistory(); }
+          catch (e) { setError((e as Error).message); } finally { setBusy(""); }
+        }}>삭제 확인</Button><Button size="sm" variant="ghost" disabled={!!busy} onClick={() => setDeleting(null)}>취소</Button></> : <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => setDeleting(row.id)}>이력 삭제</Button>}
+      </li>)}</ul>
+    </Card>
     <div className="grid gap-5 lg:grid-cols-[minmax(280px,1fr)_minmax(0,1.45fr)]">
       <Card className="space-y-4 self-start p-5">
         <label className="block text-sm font-medium">우리 쪽 역할
@@ -163,24 +216,12 @@ export default function ContractReviewPage() {
         {busy && <p role="status" className="text-sm text-muted">{busy}</p>}
         <div className="whitespace-pre-wrap"><ErrorText>{error}</ErrorText></div>
       </Card>
-      <Card className="space-y-4 self-start p-5">
-        <h2 className="font-semibold">검토 결과</h2>
-        {!result ? <p className="text-sm text-muted">검토를 실행하면 관련 조항의 원문, 우리 쪽 부담, 확인할 질문을 보여줍니다.</p> : <>
-          <p className="text-sm">확인할 조항 {result.findings.length}건</p>
-          <p className="text-xs text-muted">AI가 읽은 텍스트의 결과입니다. 계약서와 별첨의 최종본을 직접 확인하세요. 이 화면을 닫으면 결과가 사라집니다.</p>
-          {result.excluded > 0 && <p role="status" className="text-sm text-amber-800">근거 또는 표시 형식을 확인하지 못한 결과 {result.excluded}건을 제외했습니다.</p>}
-          {result.findings.map((finding, index) => <article key={index} className="space-y-3 rounded-lg border border-line p-4">
-            <Badge tone="amber">{finding.category}</Badge>
-            <h3 className="font-semibold">{finding.title}</h3>
-            {finding.evidence.map((evidence, quoteIndex) => <blockquote key={quoteIndex} className="break-words rounded-lg bg-slate-50 p-3 text-sm">
-              <p className="mb-1 text-xs font-medium text-muted">{evidence.name}{evidence.page ? ` · ${evidence.page}쪽` : ""}</p>
-              {evidence.quote}
-            </blockquote>)}
-            <p className="text-sm">{finding.impact}</p>
-            <p className="text-sm"><strong>확인할 질문</strong> · {finding.question}</p>
-          </article>)}
-        </>}
-      </Card>
+      <ReviewResultPanel record={result} edits={edits} busy={!!busy} onEdit={(index, edit) => setEdits(previous => {
+        const next = { ...previous }; const original = result?.findings[index];
+        if (original && original.status === edit.status && original.note === edit.note) delete next[index]; else next[index] = edit;
+        return next;
+      })} onSave={index => void saveFinding(index)} onDownload={() => void downloadReport()} onCopy={all => void copyQuestions(all)} copyFallback={copyFallback} />
     </div>
+    {result && <ReviewComparison key={`${result.id}-${inputVersion}`} base={base} before={result} history={history} draftBody={currentBody} draftFiles={currentFiles} blocked={!!busy || !!Object.keys(edits).length} />}
   </>;
 }

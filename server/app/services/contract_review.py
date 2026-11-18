@@ -20,6 +20,7 @@ class ReviewFile(BaseModel):
     model_config = ConfigDict(extra='forbid')
     name: str = Field(min_length=1, max_length=180)
     parts: list[SourcePart] = Field(min_length=1, max_length=20)
+    warning:str=Field(default='',max_length=1000)
 
 
 class ReviewIn(BaseModel):
@@ -58,8 +59,8 @@ class ReviewResponse(BaseModel):
 def preview(body: ReviewIn, document: ReviewFile | None) -> dict:
     files = ([document] if document else []) + body.files
     sources = [
-        {'name': file.name, 'page': part.page, 'text': part.text}
-        for file in files for part in file.parts if part.text.strip()
+        {'file_id':file_id,'name': file.name, 'page': part.page, 'text': part.text}
+        for file_id,file in enumerate(files,1) for part in file.parts if part.text.strip()
     ]
     if not sources:
         raise HTTPException(422, '계약서 또는 검토할 저장본을 선택하세요.')
@@ -110,7 +111,7 @@ def analyze(payload: str) -> dict:
             quote = ' '.join(evidence.quote.split())
             if not source or not 8 <= len(quote) <= 350 or quote not in ' '.join(source['text'].split()):
                 break
-            citations.append({'name': source['name'], 'page': source['page'], 'quote': quote})
+            citations.append({'source_id':evidence.source_id,'name': source['name'], 'page': source['page'], 'quote': quote})
         if len(citations) == len(finding.evidence):
             findings.append({
                 'category': finding.category, 'title': finding.title, 'impact': finding.impact,

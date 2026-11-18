@@ -61,6 +61,7 @@ class Contract(Base):
 
     documents: Mapped[list["Document"]] = relationship(back_populates="contract", cascade="all, delete-orphan")
     workspace_states: Mapped[list["WorkspaceState"]] = relationship(cascade="all, delete-orphan")
+    clause_reviews: Mapped[list["ClauseReview"]] = relationship(cascade="all, delete-orphan")
     user: Mapped[User] = relationship()
 
 
@@ -193,3 +194,12 @@ class WorkspaceState(Base):
     payload: Mapped[dict] = mapped_column(EncryptedJSON, default=dict)
     revision: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ClauseReview(Base):
+    __tablename__ = 'clause_reviews'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contract_id: Mapped[int] = mapped_column(ForeignKey('contracts.id', ondelete='CASCADE'), index=True)
+    payload: Mapped[dict] = mapped_column(EncryptedJSON)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
