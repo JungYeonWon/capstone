@@ -1,12 +1,15 @@
 """Three bounded, consented AI workflows. Outputs are editable proposals only."""
 import json
+import logging
 import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import ClassVar, Literal
 
 from fastapi import HTTPException
 from openai import APIConnectionError, AuthenticationError, OpenAIError, PermissionDeniedError, RateLimitError
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+log = logging.getLogger(__name__)
 
 from app.services import ai
 from app.services.contract_review import ReviewFile
@@ -249,7 +252,15 @@ def analyze(mode, payload):
             if key not in answered:
                 questions.append(question); answered.add(key)
         result.questions = questions
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as error:
+        if isinstance(error, ValidationError):
+            details = [(item['loc'], item['type']) for item in error.errors(include_input=False)][:8]
+        else:
+            details = str(error) if str(error) in {
+                'Unexpected category', 'Missing evidence', 'Ground the analysis in sources',
+                'Unverified citation', 'Meeting findings require meeting evidence', 'Unexpected drafts',
+            } else type(error).__name__
+        log.warning("Workflow response rejected: mode=%s reason=%s", mode, details)
         raise HTTPException(502, 'AI 결과의 형식이나 원문 근거를 확인하지 못했습니다. 다시 시도하세요.') from None
     return result.model_dump()
 
