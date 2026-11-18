@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine, get_db
 from app.core.security import get_current_user
 from app.models import AuditLog, Template, User
-from app.routers import auth, company, contracts, documents, templates, privacy, custom_plans, account_security, document_workflow, contract_review
+from app.routers import auth, company, contracts, documents, templates, privacy, custom_plans, account_security, document_workflow, contract_review, ai_workflows
 from app.services.source_storage import TemporaryFilesMiddleware, remove
 
 logging.basicConfig(level=logging.INFO)
@@ -122,7 +122,7 @@ app.add_middleware(TemporaryFilesMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Content-Type", "X-CSRF-Token", "X-Sensitive-Grant"], expose_headers=["Content-Disposition", "X-Reauthentication-Scope"])
 
 API = "/api/v1"
-for r in (auth.router, company.router, contracts.router, documents.router, templates.router, privacy.router, custom_plans.router, account_security.router, document_workflow.router, contract_review.router):
+for r in (auth.router, company.router, contracts.router, documents.router, templates.router, privacy.router, custom_plans.router, account_security.router, document_workflow.router, contract_review.router, ai_workflows.router):
     app.include_router(r, prefix=API)
 
 

@@ -120,6 +120,15 @@ export default function ContractWorkspace() {
       <ErrorText>{error}</ErrorText>
 
       <Card className="mb-5">
+        <CardHeader title="AI 업무 도우미" desc="요청·요구사항·회의 내용을 분석하고 검토 가능한 후속 서류를 만듭니다." />
+        <div className="grid gap-3 p-5 md:grid-cols-3">
+          <Link className="rounded-lg border border-line p-4 hover:border-primary" href={`/contracts/${cid}/assistant/change`}><h3 className="text-sm font-semibold">추가 요청 영향 분석 →</h3><p className="mt-1 text-xs text-muted">기존 과업과 비교 · 변경 합의서·협의 메일</p></Link>
+          <Link className="rounded-lg border border-line p-4 hover:border-primary" href={`/contracts/${cid}/assistant/requirements`}><h3 className="text-sm font-semibold">요구사항 구체화 →</h3><p className="mt-1 text-xs text-muted">AI 질문과 답변 · 과업지시서·견적 구성</p></Link>
+          <Link className="rounded-lg border border-line p-4 hover:border-primary" href={`/contracts/${cid}/assistant/meeting`}><h3 className="text-sm font-semibold">회의록 후속 업무 →</h3><p className="mt-1 text-xs text-muted">합의 후보·담당 업무 · 회의 확인서·메일</p></Link>
+        </div>
+      </Card>
+
+      <Card className="mb-5">
         <CardHeader title="AI 계약서 검토" desc="상대방이 보낸 계약서·별첨이나 AI로 작성한 계약서의 조건을 검토합니다."
           action={<Button variant="secondary" onClick={() => router.push(`/contracts/${cid}/review`)}>계약서 검토하기</Button>} />
       </Card>
