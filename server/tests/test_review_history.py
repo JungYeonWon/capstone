@@ -27,6 +27,22 @@ SOURCE=PAYMENT+'\n'+SUPPORT
 
 
 class ReviewHistoryTests(unittest.TestCase):
+    def test_rule_candidates_survive_save_reload_and_pdf_export(self):
+        body=self.body('계약은 별도 통지가 없으면 자동 갱신됩니다.')
+        with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value={'findings':[]}):
+            preview=self.post('/preview',body).json()
+            response=self.post('/analyze',{**body,'consent_digest':preview['consent_digest']})
+        self.assertEqual(response.status_code,200,response.text)
+        saved=response.json()
+        self.assertEqual(saved['review_version'],2)
+        self.assertEqual(saved['findings'][0]['method'],'rule')
+        loaded=self.get(f"/history/{saved['id']}").json()
+        self.assertEqual(loaded['findings'],saved['findings'])
+        report=self.get(f"/history/{saved['id']}/pdf")
+        with pymupdf.open(stream=report.content,filetype='pdf') as pdf:
+            text=''.join(page.get_text() for page in pdf)
+        self.assertIn('규칙 기반 확인 후보',text)
+
     def setUp(self):
         self.env=patch.dict(os.environ,{'DATA_ENCRYPTION_KEYS':Fernet.generate_key().decode(),'DATA_ENCRYPTION_KEY_FILE':''})
         self.env.start();cipher.cache_clear()

@@ -16,3 +16,8 @@ test('review timestamps are displayed in Korean time regardless of host timezone
   assert.equal(reviewDate('2026-11-18T01:00:00'), reviewDate('2026-11-18T01:00:00Z'));
   assert.match(reviewDate('2026-11-18T01:00:00Z'), /10:00:00/);
 });
+
+test('copied questions retain the rule candidate label', () => {
+  const record = { findings: [{ method: 'rule', status: 'pending', category: '갱신', title: '자동 갱신', question: '통지 기한은 언제인가요?' }] };
+  assert.match(questionText(record, false), /규칙 기반 확인 후보/);
+});

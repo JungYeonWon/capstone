@@ -30,7 +30,7 @@ def _client():
     return OpenAI(api_key=settings.OPENAI_API_KEY, timeout=35, max_retries=0)
 
 
-def _chat_json(system: str, user: str, *, response_model=None, raise_provider_errors=False) -> dict | None:
+def _chat_json(system: str, user: str, *, response_model=None, raise_provider_errors=False, max_completion_tokens=3000) -> dict | None:
     if not settings.ai_enabled:
         return None
     try:
@@ -40,7 +40,7 @@ def _chat_json(system: str, user: str, *, response_model=None, raise_provider_er
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 response_format=response_model,
                 temperature=0,
-                max_completion_tokens=3000,
+                max_completion_tokens=max_completion_tokens,
                 store=False,
             )
             parsed = res.choices[0].message.parsed
@@ -50,7 +50,7 @@ def _chat_json(system: str, user: str, *, response_model=None, raise_provider_er
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             response_format={"type": "json_object"},
             temperature=0,
-            max_completion_tokens=3000,
+            max_completion_tokens=max_completion_tokens,
             store=False,
         )
         return json.loads(res.choices[0].message.content or "{}")

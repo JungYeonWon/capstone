@@ -51,7 +51,8 @@ def to_out(row,detail=True):
     result={'id':row.id,'created_at':row.created_at,'revision':row.revision,'role':payload['role'],
         'document_id':payload.get('document_id'),'source_files':[{'key':g['key'],'name':g['name']} for g in file_groups(payload['sources']).values()],
         'finding_count':len(payload['findings']),'resolved_count':sum(f.get('status')=='resolved' for f in payload['findings'])}
-    if detail:result.update(findings=payload['findings'],excluded=payload.get('excluded',0),warning=payload.get('warning',''))
+    if detail:result.update(findings=payload['findings'],excluded=payload.get('excluded',0),warning=payload.get('warning',''),
+        supplement_omitted=payload.get('supplement_omitted',0),review_version=payload.get('review_version',1))
     return result
 
 
@@ -62,7 +63,8 @@ def save(db,user,contract,body,transmission,result):
     snapshot=json.loads(transmission['payload_preview'])
     findings=[{**item,'status':'pending','note':''} for item in result['findings']]
     payload={'contract_title':contract.contract_title,'role':body.role,'document_id':body.document_id,'document_signature':transmission.get('document_signature'), 'sources':snapshot['sources'],
-        'findings':findings,'excluded':result['excluded'],'warning':transmission.get('warning','')}
+        'findings':findings,'excluded':result['excluded'],'warning':transmission.get('warning',''),
+        'supplement_omitted':result.get('supplement_omitted',0),'review_version':result.get('review_version',1)}
     row=ClauseReview(contract_id=contract.id,payload=payload)
     db.add(row);db.flush()
     db.add(AuditLog(user_id=user.id,action='review_save',detail=f'계약 {contract.id} 검토 이력 {row.id} 저장'))
@@ -168,9 +170,12 @@ def report_pdf(row,contract_title,source_state='uploaded'):
     add('검토 자료: '+', '.join(g['name'] for g in file_groups(row.payload['sources']).values()))
     if row.payload.get('warning'):add(row.payload['warning'])
     if row.payload.get('excluded'):add(f"원문 근거 또는 표시 형식을 확인하지 못해 제외한 AI 결과: {row.payload['excluded']}건")
+    if row.payload.get('review_version',1)>=2: add('AI 검토에 규칙 기반 확인 후보를 보완했습니다. 규칙 일치는 불리함의 확정 판단이 아니며, 표시되지 않은 조건도 별도로 확인하세요.')
+    if row.payload.get('supplement_omitted'):add(f"표시 한도로 생략한 규칙 후보: {row.payload['supplement_omitted']}건. 자료를 나누어 다시 검토하세요.")
     if not row.payload['findings']:add('표시할 검토 항목이 없습니다. 문제가 없다는 판정을 의미하지 않습니다.')
     for index,item in enumerate(row.payload['findings'],1):
         add(f"{index}. [{item['category']}] {item['title']}",'heading')
+        if item.get('method')=='rule':add('규칙 기반 확인 후보 · 주변 조건과 실제 의무 주체 확인 필요')
         add('처리 상태: '+STATUSES[item.get('status','pending')])
         for evidence in item['evidence']:
             add(evidence['name']+(f" · {evidence['page']}쪽" if evidence['page'] else '')+'\n'+evidence['quote'],'quote')
