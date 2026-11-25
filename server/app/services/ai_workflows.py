@@ -289,9 +289,12 @@ def analyze(mode, payload):
     try:
         data = ai._chat_json(prompt, payload, response_model=RESPONSES[mode], raise_provider_errors=True, max_completion_tokens=7000)
     except (AuthenticationError, PermissionDeniedError):
-        raise HTTPException(503, 'OpenAI API 키 또는 프로젝트 권한을 확인하세요.') from None
+        raise HTTPException(503, 'OpenAI API 키 또는 프로젝트 권한을 확인하세요.', headers={'X-AI-Retryable': 'false'}) from None
     except RateLimitError as error:
-        raise HTTPException(503 if error.code == 'insufficient_quota' else 429, 'AI 사용 한도 또는 요청량을 확인하고 다시 시도하세요.') from None
+        quota = error.code in ('insufficient_quota', 'credit_balance_exhausted', 'project_spend_limit_exceeded', 'organization_spend_limit_exceeded', 'organization_usage_limit_exceeded')
+        raise HTTPException(503 if quota else 429,
+                            'OpenAI 사용 한도를 확인해야 합니다. 서비스 관리자에게 문의하세요.' if quota else 'AI 요청이 많습니다. 잠시 후 다시 시도하세요.',
+                            headers={'X-AI-Retryable': 'false' if quota else 'true'}) from None
     except APIConnectionError:
         raise HTTPException(503, 'AI 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.') from None
     except OpenAIError:

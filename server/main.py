@@ -119,7 +119,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="계약·행정서류 자동화 API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(TemporaryFilesMiddleware)
-app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Content-Type", "X-CSRF-Token", "X-Sensitive-Grant"], expose_headers=["Content-Disposition", "X-Reauthentication-Scope"])
+app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Content-Type", "X-CSRF-Token", "X-Sensitive-Grant"], expose_headers=["Content-Disposition", "X-Reauthentication-Scope", "X-AI-Retryable"])
 
 API = "/api/v1"
 for r in (auth.router, company.router, contracts.router, documents.router, templates.router, privacy.router, custom_plans.router, account_security.router, document_workflow.router, contract_review.router, ai_workflows.router):

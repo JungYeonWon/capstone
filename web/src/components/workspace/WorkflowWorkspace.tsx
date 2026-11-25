@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, ApiError } from "@/lib/api";
 import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import type { Doc } from "@/lib/types";
 import { WORKFLOW_MODES, emptyWorkflow, estimateAmounts, type WorkflowDraft, type WorkflowFile, type WorkflowInput, type WorkflowMode,
@@ -12,6 +12,7 @@ import WorkflowResults from "./WorkflowResults";
 import WorkflowEstimate from "./WorkflowEstimate";
 import DraftMergeReview from "./DraftMergeReview";
 import { applyDraftChange, compareDrafts, identifyDrafts } from "@/lib/draft-reconciliation";
+import { RecoveryComparison } from "./DraftRecovery";
 
 export default function WorkflowWorkspace({ contractId, mode }: { contractId: number; mode: WorkflowMode }) {
   const base = `/contracts/${contractId}/ai-workflows/${mode}`;
@@ -29,16 +30,23 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
   const [consent, setConsent] = useState(false);
   const [generation, setGeneration] = useState(0);
   const [created, setCreated] = useState<Record<number, string>>({});
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [conflicted, setConflicted] = useState(false);
+  const [remote, setRemote] = useState<{ payload: WorkflowSession | null; revision: number; updated_at?: string } | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [retryAI, setRetryAI] = useState(false);
+  const actionLock = useRef(false);
   useUnsavedChanges(dirty || busy);
 
   useEffect(() => {
     let active = true;
-    Promise.all([api.get<{ payload: WorkflowSession | null; revision: number }>(`${base}/session`), api.get<Doc[]>(`/contracts/${contractId}/documents`)])
+    Promise.all([api.get<{ payload: WorkflowSession | null; revision: number; updated_at?: string }>(`${base}/session`), api.get<Doc[]>(`/contracts/${contractId}/documents`)])
       .then(([saved, documents]) => {
         if (!active) return;
         if (saved.payload) setSession({ ...saved.payload, output: saved.payload.output ? { ...saved.payload.output, result: {
           ...saved.payload.output.result, drafts: identifyDrafts(saved.payload.output.result.drafts) } } : null });
         setRevision(saved.revision); setDocs(documents); setLoaded(true); setError("");
+        setLastSavedAt(saved.updated_at ?? null);
       }).catch(e => { if (active) setError((e as Error).message); });
     return () => { active = false; };
   }, [base, contractId, retry]);
@@ -46,6 +54,7 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
   const editInput = (input: WorkflowInput) => {
     setSession(current => ({ ...current, input, output_stale: !!current.output }));
     setPreview(null); setPreparedInput(null); setConsent(false); setDirty(true); setMessage("");
+    setRetryAI(false);
   };
   const answer = (question: string, text: string, confirmed = false, topic = "other", resolves: string[] = []) => {
     const existing = session.input.answers.find(a => a.question === question);
@@ -91,6 +100,8 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
   };
   const analyze = async () => {
     if (!preview || !preparedInput || !consent || !preview.ai_available || session.draft_changes?.length) return;
+    if (actionLock.current) return;
+    actionLock.current = true;
     setBusy(true); setError(""); setMessage("");
     try {
       const output = await api.post<WorkflowOutput>(`${base}/analyze`, { ...preparedInput, consent_digest: preview.consent_digest });
@@ -103,17 +114,32 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
       });
       setCreated({}); setGeneration(n => n + 1); setDirty(true); setConsent(false); setPreview(null);
       setMessage(session.output ? "새 분석 결과를 받았습니다. 기존 초안과 견적 입력은 유지했으며, 달라진 문구는 항목별로 선택 반영할 수 있습니다." : "분석 결과가 생성됐습니다. 내용을 검토하고 작업 저장 또는 서류로 저장을 진행하세요.");
-    } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    } catch (e) { setError((e as Error).message); setRetryAI(e instanceof ApiError && e.retryable); }
+    finally { actionLock.current = false; setBusy(false); }
   };
-  const save = async () => {
+  const save = async (nextRevision = revision) => {
     if (estimateAmounts(session.estimate_lines).total === null) { setError("견적 항목의 작업명·단위·수량·단가를 확인하세요."); return; }
     setBusy(true); setError(""); setMessage("");
     try {
-      const result = await api.put<{ revision: number }>(`${base}/session`, { payload: session, revision });
+      const result = await api.put<{ revision: number }>(`${base}/session`, { payload: session, revision: nextRevision });
       setRevision(result.revision); setDirty(false); setMessage("작업을 저장했습니다. 이 계약에서 기능별로 마지막 저장 내용을 다시 열 수 있습니다.");
-    } catch (e) { setError((e as Error).message); }
+      setLastSavedAt(new Date().toISOString()); setSaveFailed(false); setConflicted(false); setRemote(null);
+    } catch (e) { setError((e as Error).message); setSaveFailed(true); if (e instanceof ApiError && e.status === 409) setConflicted(true); }
     finally { setBusy(false); }
+  };
+  const compareSaved = async () => {
+    setBusy(true);
+    try { setRemote(await api.get(`${base}/session`)); setError(""); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  const useServer = () => {
+    if (!remote) return;
+    setSession(remote.payload ?? emptyWorkflow());
+    setRevision(remote.revision); setLastSavedAt(remote.updated_at ?? null);
+    setRemote(null); setConflicted(false); setSaveFailed(false); setDirty(false);
+    setPreview(null); setPreparedInput(null); setConsent(false); setCreated({});
+    setGeneration(n => n + 1); setError(""); setMessage("서버 저장본을 불러왔습니다.");
   };
   const createDocument = async (index: number) => {
     if (!session.output || session.output_stale || created[index] || session.draft_changes?.some(change => change.kind === session.output!.result.drafts[index].kind)) return;
@@ -139,13 +165,22 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
         href={`/contracts/${contractId}/assistant/${key}`}>{value.title}</Link>)}
     </nav>
     <ErrorText>{error}</ErrorText>
+    {saveFailed && <div className="mb-4 space-y-2">
+      <p className="text-sm text-muted">현재 입력·초안·견적 내용을 유지했습니다.</p>
+      <Button variant="secondary" disabled={busy} onClick={() => conflicted ? compareSaved() : save()}>
+        {conflicted ? "서버 저장본과 비교" : "작업 저장 다시 시도"}
+      </Button>
+    </div>}
+    {remote && <RecoveryComparison local={session} remote={remote.payload ?? emptyWorkflow()} busy={busy}
+      onLocal={() => void save(remote.revision)} onRemote={useServer} />}
+    {lastSavedAt && <p className="mb-3 text-xs text-muted">마지막 작업 저장 {new Date(/Z$|[+-]\d\d:\d\d$/.test(lastSavedAt) ? lastSavedAt : lastSavedAt + "Z").toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</p>}
     {message && <p role="status" className="mb-4 rounded bg-indigo-50 p-3 text-sm text-primary">{message}</p>}
     <div className="grid items-start gap-5 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)]">
       <div className="space-y-5">
         <Card className="space-y-4 p-5">
           <h2 className="font-semibold">{config.title}</h2>
           <WorkflowInputs mode={mode} input={session.input} docs={docs} busy={busy} onChange={editInput} onUpload={upload} />
-          <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy || !!session.draft_changes?.length} onClick={prepare}>AI 전송 내용 확인</Button><Button variant="secondary" disabled={busy || !dirty} onClick={save}>작업 저장</Button></div>
+          <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy || !!session.draft_changes?.length} onClick={prepare}>AI 전송 내용 확인</Button><Button variant="secondary" disabled={busy || !dirty} onClick={() => save()}>작업 저장</Button></div>
           {!!session.draft_changes?.length && <p className="text-xs text-amber-800">재분석 변경 제안을 먼저 선택하세요. 미선택 제안도 작업 저장으로 보관할 수 있습니다.</p>}
           <p className="text-xs text-muted">{dirty ? "미저장 변경사항이 있습니다." : "저장된 상태입니다."} 작업은 기능별 1개씩 암호화 저장됩니다. 30일간 수정하지 않은 작업은 정리될 수 있습니다. 생성해 저장한 서류는 계약에 남습니다.</p>
           {preview && <section className="space-y-3 rounded border border-line p-3">
@@ -154,7 +189,7 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
             <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs">{preview.payload_preview}</pre>
             {!preview.ai_available && <p className="text-xs text-amber-800">외부 AI가 연결되지 않았습니다. 서버의 API 키 설정을 확인하세요.</p>}
             <label className="flex gap-2 text-xs"><input type="checkbox" disabled={busy || !preview.ai_available} checked={consent} onChange={e => setConsent(e.target.checked)} />위 마스킹된 자료를 OpenAI에 전송하는 데 동의합니다.</label>
-            <Button loading={busy} disabled={busy || !consent || !preview.ai_available} onClick={analyze}>{config.action}</Button>
+            <Button loading={busy} disabled={busy || !consent || !preview.ai_available} onClick={analyze}>{retryAI ? "AI 분석 다시 시도" : config.action}</Button>
           </section>}
         </Card>
         {mode === "requirements" && <Card className="p-5"><WorkflowEstimate lines={session.estimate_lines} disabled={busy} onChange={estimate_lines => { setSession(current => ({ ...current, estimate_lines })); setDirty(true); setMessage(""); }} /></Card>}

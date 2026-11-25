@@ -96,7 +96,8 @@ class SessionIn(flow.Strict):
 def get_session(contract_id: int, mode: flow.Mode, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     get_owned(db, user, contract_id)
     row = db.get(WorkspaceState, (contract_id, f'assistant_{mode}'))
-    return {'payload': row.payload if row else None, 'revision': row.revision if row else 0}
+    return {'payload': row.payload if row else None, 'revision': row.revision if row else 0,
+            'updated_at': row.updated_at if row else None}
 
 
 @router.put('/{mode}/session')

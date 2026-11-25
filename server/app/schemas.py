@@ -145,6 +145,7 @@ class DocumentCreate(BaseModel):
 
 class DocumentUpdate(BaseModel):
     values: dict[str, str]
+    expected_updated_at: datetime | None = None
 
 
 class DocumentOut(ORM):

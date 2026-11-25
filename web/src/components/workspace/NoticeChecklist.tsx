@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useWorkspaceDraft } from "@/lib/useWorkspaceDraft";
+import DraftRecovery from "./DraftRecovery";
 import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import { applyNoticeAnalysis, FACT_LABELS, type NoticeAnalysis, type NoticeState, type NoticeItem, type NoticeFact } from "@/lib/notice";
 import type { Doc, Template } from "@/lib/types";
@@ -56,6 +57,7 @@ export default function NoticeChecklist({ contractId, active, onDocumentsChanged
     <h3 className="font-semibold">안내문 분석 · 제출 준비</h3>
     <p className="text-xs text-muted">안내문을 넣으면 제출 서류와 기한·방법·문의처를 원문 근거와 함께 정리합니다. 분석 결과를 확인하고 적용하세요.</p>
     <ErrorText>{error || draft.error}</ErrorText><p role="status" className="text-xs text-muted">{draft.status}</p>
+    <DraftRecovery draft={draft} />
     {draft.ready && <>
       <label className="block text-sm">안내문 파일 (PDF·한글·Word·TXT)<input aria-label="안내문 파일 선택" type="file" accept=".pdf,.hwp,.hwpx,.docx,.txt,application/pdf,application/haansofthwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" className="mt-1 block w-full text-xs" disabled={busy} onChange={e => {
         const file = e.target.files?.[0]; if (!file) return;

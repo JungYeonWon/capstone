@@ -12,10 +12,13 @@ export function clearSession() {
 async function csrfToken() {
   if (csrf) return csrf;
   csrfRequest ??= fetch(`${BASE}/auth/csrf`, { credentials: "include", cache: "no-store" }).then(async res => {
-    if (!res.ok) throw new ApiError(res.status, "다시 로그인하세요.");
+    if (!res.ok) throw new ApiError(res.status, res.status === 401 ? "다시 로그인하세요." : "서버에 연결하지 못했습니다. 현재 입력을 유지했습니다. 잠시 후 다시 시도하세요.");
     const body = await res.json();
     csrf = body.csrf_token;
     return body.csrf_token as string;
+  }).catch(error => {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(0, "서버에 연결할 수 없습니다. 현재 입력을 유지했습니다. 연결을 확인한 뒤 다시 시도하세요.");
   }).finally(() => { csrfRequest = null; });
   return csrfRequest;
 }
@@ -26,7 +29,7 @@ function requestReauth(scope: string): Promise<string> {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public retryable = [0, 408, 429, 500, 502, 503, 504].includes(status)) {
     super(message);
   }
 }
@@ -39,7 +42,12 @@ async function request(path: string, init: RequestInit = {}, retried = false): P
     headers.set("X-CSRF-Token", await csrfToken());
   }
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
-  const res = await fetch(`${BASE}${path}`, { ...init, headers, credentials: "include", cache: "no-store" });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, { ...init, headers, credentials: "include", cache: "no-store" });
+  } catch {
+    throw new ApiError(0, "서버에 연결할 수 없습니다. 현재 입력을 유지했습니다. 연결을 확인한 뒤 다시 시도하세요.");
+  }
   const scope = res.headers.get("X-Reauthentication-Scope");
   if (res.status === 403 && scope && !retried) {
     headers.set("X-Sensitive-Grant", await requestReauth(scope));
@@ -56,15 +64,32 @@ async function request(path: string, init: RequestInit = {}, retried = false): P
       clearSession();
       window.location.href = "/login";
     }
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, res.headers.get("X-AI-Retryable") === "false" ? false :
+      [408, 429, 500, 502, 503, 504].includes(res.status));
   }
   return res;
 }
 
+const aiRequests = new Map<string, Promise<unknown>>();
+
+function post<T>(path: string, body?: unknown): Promise<T> {
+  const serialized = body === undefined ? undefined : JSON.stringify(body);
+  const isAI = /\/(analyze|suggest|propose)$|\/generate\//.test(path);
+  const identity = path + "\n" + serialized;
+  if (isAI && aiRequests.has(identity)) return aiRequests.get(identity) as Promise<T>;
+  const pending = request(path, { method: "POST", body: serialized }).then(response => response.json() as Promise<T>);
+  if (isAI) {
+    aiRequests.set(identity, pending);
+    void pending.finally(() => {
+      if (aiRequests.get(identity) === pending) aiRequests.delete(identity);
+    }).catch(() => {});
+  }
+  return pending;
+}
+
 export const api = {
   get: async <T>(path: string) => (await request(path)).json() as Promise<T>,
-  post: async <T>(path: string, body?: unknown) =>
-    (await request(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) })).json() as Promise<T>,
+  post,
   put: async <T>(path: string, body: unknown) =>
     (await request(path, { method: "PUT", body: JSON.stringify(body) })).json() as Promise<T>,
   del: async <T>(path: string) => (await request(path, { method: "DELETE" })).json() as Promise<T>,

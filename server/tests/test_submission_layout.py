@@ -10,9 +10,51 @@ from app.professional_templates import BUILTIN_TEMPLATES
 from app.routers.templates import SAMPLE_VALUES
 from app.services.professional_renderer import render_docx, render_hwpx, item_amounts, HWP_CONTENT_WIDTH
 from app.services.renderer import docx_to_pdf_bytes, pdf_preview_pages
+from app.services.professional_renderer import render_quotation_xlsx
+from openpyxl import load_workbook
 
 
 class SubmissionLayoutTests(unittest.TestCase):
+    def test_long_table_repeats_headers_keeps_all_rows_and_signature_together(self):
+        definition = {'title': '장기 프로젝트 수행 결과와 납품 내역 검토서', 'signature': True,
+            'recipient': '{client_name} 귀하', 'sections': [
+                {'type': 'info', 'rows': [['계약명', 'contract_title'], ['주소', 'address']]},
+                {'type': 'data_table', 'label': '납품 세부 내역', 'key': 'custom_1', 'columns': ['납품 항목', '금액']}]}
+        values = {**SAMPLE_VALUES, 'contract_title': '지역 통합 정보 시스템 구축 및 운영 지원 사업 ' * 5,
+                  'address': '서울특별시 가상구 가상로 123 테스트빌딩 ' * 4,
+                  'custom_1': '\n'.join(f'항목{i:03d} ' + '긴 납품 내용 ' * 7 + f' | {1000000 + i:,}' for i in range(50))}
+        with pymupdf.open(stream=docx_to_pdf_bytes(render_docx(definition, values)), filetype='pdf') as pdf:
+            self.assertGreater(len(pdf), 2)
+            text = ''.join(page.get_text() for page in pdf)
+            for index in range(50):
+                self.assertIn(f'항목{index:03d}', text)
+            for page in pdf:
+                if '항목0' in page.get_text():
+                    self.assertIn('납품 항목', page.get_text())
+                for word in page.get_text('words'):
+                    self.assertGreaterEqual(word[0], 60)
+                    self.assertLessEqual(word[2], page.rect.width - 60)
+            signature = next(page.get_text() for page in pdf if '대표자' in page.get_text())
+            self.assertIn(values['submit_date'], signature)
+            self.assertIn(values['company_name'], signature)
+        with ZipFile(BytesIO(render_hwpx(definition, values))) as archive:
+            root = etree.fromstring(archive.read('Contents/section0.xml'))
+            ns = {'hp': 'http://www.hancom.co.kr/hwpml/2011/paragraph'}
+            heights = [int(node.get('height')) for node in root.xpath('//hp:cellSz', namespaces=ns)]
+            self.assertGreater(max(heights), 2200)
+            for table in root.xpath('//hp:tbl', namespaces=ns):
+                row_heights = [max(int(node.get('height')) for node in row.xpath('./hp:tc/hp:cellSz', namespaces=ns))
+                               for row in table.xpath('./hp:tr', namespaces=ns)]
+                self.assertEqual(int(table.find('hp:sz', ns).get('height')), sum(row_heights))
+
+    def test_quotation_long_rows_wrap_and_print_over_multiple_readable_pages(self):
+        values = {**SAMPLE_VALUES, 'quote_items': ('설계 및 개발 상세 설명 ' * 15) + ' | 1 | 1000000 | 확인 사항'}
+        workbook = load_workbook(BytesIO(render_quotation_xlsx(values)))
+        sheet = workbook.active
+        self.assertGreater(sheet.row_dimensions[14].height, 24)
+        self.assertEqual(sheet.page_setup.fitToWidth, 1)
+        self.assertEqual(sheet.page_setup.fitToHeight, 0)
+        self.assertEqual(sheet.print_title_rows, '$13:$13')
     def test_editor_preview_preserves_pdf_pages_and_aspect_ratio(self):
         definition = next(t['definition'] for t in BUILTIN_TEMPLATES if t['key'] == 'completion')
         pdf = docx_to_pdf_bytes(render_docx(definition, SAMPLE_VALUES))

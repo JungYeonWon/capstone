@@ -9,6 +9,7 @@ import { useWorkspaceDraft } from "@/lib/useWorkspaceDraft";
 import type { CustomPlanLayout, CustomPlanSection, Doc } from "@/lib/types";
 import { Badge, Button, ErrorText, Input, Textarea } from "@/components/ui";
 import LayoutReviewDialog from "./LayoutReviewDialog";
+import DraftRecovery from "./DraftRecovery";
 
 type Transfer = { provider: string; ai_available: boolean; payload_preview: string; consent_digest: string };
 type Proposal = { layout: CustomPlanLayout; mode: string; warning: string; matches: { id: number; name: string; reason: string; project_code: string }[] };
@@ -75,6 +76,7 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
       <p className="mt-1 text-xs leading-relaxed text-muted">라이브러리에 없는 문서를 만들어 보세요. 제목·목적·내용 입력 → AI 구성 제안 → 구성 수정 → 본문 작성·전체 페이지 미리보기 → 한글파일 다운로드 순서입니다. 기관 지정 서식이 있다면 양식 업로드를 이용하세요.</p></div>
     <ErrorText>{error}</ErrorText>
     <ErrorText>{draft.error}</ErrorText>
+    {!editorOpen && <DraftRecovery draft={draft} />}
     <p role="status" className="text-xs text-muted">{draft.status} · 회사 자료는 암호화하여 서버에 저장합니다.</p>
     {!draft.ready ? <p className="text-sm">초안을 불러오는 중입니다.</p> : <>
     {!layout ? <>
@@ -110,6 +112,7 @@ export default function CustomPlanBuilder({ contractId }: { contractId: number }
         <div className="flex flex-wrap items-center justify-between gap-2"><span role="status" className="text-xs text-muted">{draft.status}</span><div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy} onClick={() => setEditorOpen(false)}>닫기</Button><Button loading={busy} disabled={!ack || !layout.title.trim() || layout.sections.some(section => !section.label.trim())} onClick={create}>확정하고 초안 작성</Button></div></div>
       </>}>
       <ErrorText>{error || draft.error}</ErrorText>
+      <DraftRecovery draft={draft} />
       <div className="flex flex-wrap items-center gap-2"><Badge>{proposal?.mode === "ai" ? "AI 자유 양식 구성" : "직접 편집할 기본 구성"}</Badge><Badge tone="amber">검토용 초안 · 지정 서식 아님</Badge></div>
       {proposal?.warning && <p role="status" className="text-xs text-amber-700">{proposal.warning}</p>}
       {proposal && proposal.matches.length > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">

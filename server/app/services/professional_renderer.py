@@ -6,6 +6,8 @@ real formulas so users can continue editing quantities and unit prices.
 
 import html
 import re
+import math
+import unicodedata
 from decimal import Decimal, ROUND_HALF_UP
 from copy import deepcopy
 from io import BytesIO
@@ -94,12 +96,25 @@ def _set_cell_text(cell, text: str, *, bold=False, size=10, align=WD_ALIGN_PARAG
     if color:
         r.font.color.rgb = RGBColor(*color)
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    properties = cell._tc.get_or_add_tcPr()
+    margins = properties.find(qn("w:tcMar"))
+    if margins is None:
+        margins = OxmlElement("w:tcMar")
+        properties.append(margins)
+    for side, amount in (("left", 160), ("right", 160), ("top", 140), ("bottom", 140)):
+        node = margins.find(qn(f"w:{side}"))
+        if node is None:
+            node = OxmlElement(f"w:{side}")
+            margins.append(node)
+        node.set(qn("w:w"), str(amount))
+        node.set(qn("w:type"), "dxa")
 
 
 def _paragraph(doc, text="", *, bold=False, size=10.5, align=WD_ALIGN_PARAGRAPH.LEFT, after=6):
     p = doc.add_paragraph()
     p.alignment = align
     p.paragraph_format.space_after = Pt(after)
+    p.paragraph_format.widow_control = True
     for i, line in enumerate(str(text).split("\n")):
         if i:
             p.add_run().add_break()
@@ -121,7 +136,8 @@ def _doc_base(title: str) -> DocxDocument:
     normal.font.name = FONT
     normal._element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
     doc.core_properties.title = title.replace(" ", "")
-    _paragraph(doc, title, bold=True, size=22, align=WD_ALIGN_PARAGRAPH.CENTER, after=26)
+    heading = _paragraph(doc, title, bold=True, size=22, align=WD_ALIGN_PARAGRAPH.CENTER, after=26)
+    heading.paragraph_format.keep_with_next = True
     return doc
 
 
@@ -220,7 +236,8 @@ def render_docx(definition: dict, values: dict, seal=None) -> DocxDocument:
             _set_cell_text(table.cell(1, 0), values.get(section["key"], ""), size=10)
             _paragraph(doc, after=5)
         elif kind == "data_table":
-            _paragraph(doc, section['label'], bold=True, after=5)
+            heading = _paragraph(doc, section['label'], bold=True, after=5)
+            heading.paragraph_format.keep_with_next = True
             rows = data_table_rows(section, values)
             table = doc.add_table(rows=len(rows), cols=len(rows[0]))
             table.style = 'Table Grid'
@@ -229,7 +246,11 @@ def render_docx(definition: dict, values: dict, seal=None) -> DocxDocument:
                 column.width = Cm(16.6 / len(rows[0]))
             for ri, row in enumerate(rows):
                 for ci, value in enumerate(row):
-                    _set_cell_text(table.cell(ri, ci), value, bold=ri == 0, size=10)
+                    cell = table.cell(ri, ci)
+                    cell.width = Cm(16.6 / len(rows[0]))
+                    numeric = ri > 0 and any(word in rows[0][ci] for word in ('금액', '단가', '수량', '합계', '세액'))
+                    _set_cell_text(cell, value, bold=ri == 0, size=10,
+                                   align=WD_ALIGN_PARAGRAPH.RIGHT if numeric else WD_ALIGN_PARAGRAPH.LEFT)
                     if ri == 0: _set_cell_shading(table.cell(ri, ci), 'F2F3F5')
                 if ri > 0: table.rows[ri].height = Cm(.7)
             table.rows[0]._tr.get_or_add_trPr().append(OxmlElement('w:tblHeader'))
@@ -260,11 +281,12 @@ def render_docx(definition: dict, values: dict, seal=None) -> DocxDocument:
 
 
 def _signature_docx(doc, values, recipient, seal=None):
-    _paragraph(doc, values.get("submit_date") or "    년    월    일", size=11, align=WD_ALIGN_PARAGRAPH.CENTER, after=18)
+    date = _paragraph(doc, values.get("submit_date") or "    년    월    일", size=11, align=WD_ALIGN_PARAGRAPH.CENTER, after=18)
+    date.paragraph_format.keep_with_next = True
     for label, key in (("주 소", "address"), ("상 호", "company_name"), ("대표자", "representative")):
         suffix = ("             (인)" if seal else "       (인)") if key == "representative" else ""
         p = _paragraph(doc, f"{label} : {values.get(key, '')}{suffix}", align=WD_ALIGN_PARAGRAPH.RIGHT, after=8)
-        p.paragraph_format.keep_with_next = True
+        p.paragraph_format.keep_with_next = key != 'representative' or bool(recipient)
         if key == 'representative' and seal:
             from app.services.seal import add_docx_seal
             sec = doc.sections[0]
@@ -374,12 +396,16 @@ def render_quotation_xlsx(values: dict, seal=None) -> bytes:
     for col, width in enumerate((36, 9, 15, 16, 14, 30), 1):
         ws.column_dimensions[get_column_letter(col)].width = width
     for row in range(1, total + 1):
-        ws.row_dimensions[row].height = 24
-    ws.row_dimensions[1].height = 30; ws.row_dimensions[2].height = 30
+        lines = max(wrapped_line_count(ws.cell(row, col).value, (36, 9, 15, 16, 14, 30)[col - 1])
+                    for col in range(1, 7) if ws.cell(row, col).data_type != 'f')
+        ws.row_dimensions[row].height = min(409, max(24, lines * 14 + 8))
+    for row in (1, 2):
+        ws.row_dimensions[row].height = max(30, ws.row_dimensions[row].height)
     ws.print_area = f"A1:F{total}"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
-    ws.page_setup.fitToWidth = 1; ws.page_setup.fitToHeight = 1
+    ws.page_setup.fitToWidth = 1; ws.page_setup.fitToHeight = 0
+    ws.print_title_rows = "13:13"
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.oddFooter.center.text = "&P / &N"
     if seal:
@@ -406,6 +432,15 @@ def _q(ns, name):
     return f"{{{ns}}}{name}"
 
 
+def wrapped_line_count(text, capacity):
+    """Conservative width estimate in half-width characters, including explicit breaks."""
+    total = 0
+    for line in str(text or "").split("\n"):
+        units = sum(2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1 for char in line)
+        total += max(1, math.ceil(units / max(1, capacity)))
+    return total
+
+
 def _hp_paragraph(text: str, *, para_style=23, char_style=16):
     p = etree.Element(_q(HP, "p"), id="0", paraPrIDRef=str(para_style), styleIDRef="0", pageBreak="0", columnBreak="0", merged="0")
     run = etree.SubElement(p, _q(HP, "run"), charPrIDRef=str(char_style))
@@ -418,16 +453,21 @@ def _hp_paragraph(text: str, *, para_style=23, char_style=16):
     return p
 
 
-def _hp_table(rows: list[list[str]], widths: list[int], *, header_rows=0, label_cols=0, body_height=2200):
+def _hp_table(rows: list[list[str]], widths: list[int], *, header_rows=0, label_cols=0, body_height=2200, numeric_cols=()):
     total_width = sum(widths)
     widths = [round(w * HWP_CONTENT_WIDTH / total_width) for w in widths]
     widths[-1] += HWP_CONTENT_WIDTH - sum(widths)
     table = etree.Element(_q(HP, "tbl"), id="1", zOrder="0", numberingType="TABLE", textWrap="TOP_AND_BOTTOM", textFlow="BOTH_SIDES", lock="0", dropcapstyle="None", pageBreak="CELL", repeatHeader="1", rowCnt=str(len(rows)), colCnt=str(len(widths)), cellSpacing="0", borderFillIDRef="3", noAdjust="0")
-    height = header_rows * 2200 + (len(rows) - header_rows) * body_height
+    heights = [
+        max(2200 if index < header_rows else body_height,
+            max(wrapped_line_count(text, (width - 1600) / 500) for text, width in zip(row, widths)) * 1600 + 1400)
+        for index, row in enumerate(rows)
+    ]
+    height = sum(heights)
     etree.SubElement(table, _q(HP, "sz"), width=str(sum(widths)), widthRelTo="ABSOLUTE", height=str(max(2200, height)), heightRelTo="ABSOLUTE", protect="0")
     etree.SubElement(table, _q(HP, "pos"), treatAsChar="1", affectLSpacing="0", flowWithText="1", allowOverlap="0", holdAnchorAndSO="0", vertRelTo="PARA", horzRelTo="COLUMN", vertAlign="TOP", horzAlign="LEFT", vertOffset="0", horzOffset="0")
     etree.SubElement(table, _q(HP, "outMargin"), left="0", right="0", top="180", bottom="180")
-    etree.SubElement(table, _q(HP, "inMargin"), left="300", right="300", top="160", bottom="160")
+    etree.SubElement(table, _q(HP, "inMargin"), left="800", right="800", top="700", bottom="700")
     for r_idx, row in enumerate(rows):
         tr = etree.SubElement(table, _q(HP, "tr"))
         for c_idx, width in enumerate(widths):
@@ -437,18 +477,20 @@ def _hp_table(rows: list[list[str]], widths: list[int], *, header_rows=0, label_
             tc = etree.SubElement(tr, _q(HP, "tc"), name="", header="1" if header else "0", hasMargin="0", protect="0", editable="0", dirty="0", borderFillIDRef=fill)
             sub = etree.SubElement(tc, _q(HP, "subList"), id="", textDirection="HORIZONTAL", lineWrap="BREAK", vertAlign="CENTER", linkListIDRef="0", linkListNextIDRef="0", textWidth="0", textHeight="0", hasTextRef="0", hasNumRef="0")
             text = row[c_idx] if c_idx < len(row) else ""
-            sub.append(_hp_paragraph(text, para_style=21 if header or label else 23, char_style=15 if header or label else 16))
+            para_style = 21 if header or label else 22 if c_idx in numeric_cols else 23
+            sub.append(_hp_paragraph(text, para_style=para_style, char_style=15 if header or label else 16))
             etree.SubElement(tc, _q(HP, "cellAddr"), colAddr=str(c_idx), rowAddr=str(r_idx))
             etree.SubElement(tc, _q(HP, "cellSpan"), colSpan="1", rowSpan="1")
-            etree.SubElement(tc, _q(HP, "cellSz"), width=str(width), height=str(2200 if header else body_height))
-            etree.SubElement(tc, _q(HP, "cellMargin"), left="300", right="300", top="160", bottom="160")
+            etree.SubElement(tc, _q(HP, "cellSz"), width=str(width), height=str(heights[r_idx]))
+            etree.SubElement(tc, _q(HP, "cellMargin"), left="800", right="800", top="700", bottom="700")
     p = _hp_paragraph("")
     run = p.find(_q(HP, "run"))
     run.insert(0, table)
     return p
 
 
-def _hwpx_section(definition: dict, values: dict, seal=None, seal_style=None) -> tuple[bytes, str]:
+def _hwpx_section(definition: dict, values: dict, seal=None, seal_style=None, layout_styles=None) -> tuple[bytes, str]:
+    layout_styles = layout_styles or {'title': 21, 'heading': 23, 'signature': 22, 'date': 21}
     values = presentation_values(values)
     with ZipFile(BASE_HWPX) as z:
         root = etree.fromstring(z.read("Contents/section0.xml"))
@@ -459,12 +501,11 @@ def _hwpx_section(definition: dict, values: dict, seal=None, seal_style=None) ->
     for key, value in {'left': '6236', 'right': '6236', 'top': '5102', 'bottom': '4819', 'header': '0', 'footer': '0'}.items():
         margin.set(key, value)
     preview = [definition.get("title", "서류")]
-    root.append(_hp_paragraph(definition.get("title", "서류"), para_style=21, char_style=13))
-    root.append(_hp_paragraph(""))
+    root.append(_hp_paragraph(definition.get("title", "서류"), para_style=layout_styles['title'], char_style=13))
     for section in definition.get("sections", []):
         kind = section.get("type")
         if kind == "page_break":
-            title = _hp_paragraph(section["title"], para_style=21, char_style=13)
+            title = _hp_paragraph(section["title"], para_style=layout_styles['title'], char_style=13)
             title.set("pageBreak", "1")
             root.append(title)
             preview.append(section["title"])
@@ -484,8 +525,10 @@ def _hwpx_section(definition: dict, values: dict, seal=None, seal_style=None) ->
             root.append(_hp_table([[label], [value]], [50000], header_rows=1)); preview += [label, value]
         elif kind == "data_table":
             rows = data_table_rows(section, values)
-            root.append(_hp_paragraph(section['label'], char_style=15))
-            root.append(_hp_table(rows, [50000 // len(rows[0])] * len(rows[0]), header_rows=1))
+            root.append(_hp_paragraph(section['label'], para_style=layout_styles['heading'], char_style=15))
+            numeric_cols = [index for index, label in enumerate(rows[0])
+                            if any(word in label for word in ('금액', '단가', '수량', '합계', '세액'))]
+            root.append(_hp_table(rows, [50000 // len(rows[0])] * len(rows[0]), header_rows=1, numeric_cols=numeric_cols))
             preview += [section['label'], *[' | '.join(row) for row in rows]]
         elif kind == "line_items":
             items = parse_items(values.get(section.get("key"), ""), values.get("description") or values.get("contract_title", ""), money(values.get("supply_amount")))
@@ -497,7 +540,7 @@ def _hwpx_section(definition: dict, values: dict, seal=None, seal_style=None) ->
                 tax_total += tax
                 rows.append([item["name"], f"{item['qty']:g}", f"{item['unit']:,}", f"{supply:,}", f"{tax:,}", f"{supply + tax:,}"])
             rows.append(["합 계", "", "", f"{supply_total:,}", f"{tax_total:,}", f"{supply_total + tax_total:,}"])
-            root.append(_hp_table(rows, [18000, 4500, 7500, 7500, 5500, 7000], header_rows=1)); preview += [" | ".join(r) for r in rows]
+            root.append(_hp_table(rows, [18000, 4500, 7500, 7500, 5500, 7000], header_rows=1, numeric_cols=range(1, 6))); preview += [" | ".join(r) for r in rows]
         elif kind == "numbered":
             for idx, item in enumerate(section.get("items", []), 1):
                 text = f"{idx}. {_fill(item, values)}"; root.append(_hp_paragraph(text)); preview.append(text)
@@ -516,7 +559,10 @@ def _hwpx_section(definition: dict, values: dict, seal=None, seal_style=None) ->
             f"주 소 : {values.get('address', '')}", f"상 호 : {values.get('company_name', '')}",
             f"대표자 : {values.get('representative', '')}  (인)",
         ):
-            root.append(_hp_paragraph(text, para_style=22, char_style=16)); preview.append(text)
+            style = layout_styles['date'] if text == (values.get("submit_date") or "    년    월    일") else layout_styles['signature']
+            if text.startswith('대표자 :') and not definition.get("recipient"):
+                style = 22
+            root.append(_hp_paragraph(text, para_style=style, char_style=16)); preview.append(text)
     if definition.get("recipient"):
         text = _fill(definition["recipient"], values)
         root.append(_hp_paragraph(text, para_style=23, char_style=14)); preview.append(text)
@@ -542,11 +588,30 @@ def render_hwpx(definition: dict, values: dict, seal=None) -> bytes:
     with ZipFile(BASE_HWPX) as src:
         header = etree.fromstring(src.read('Contents/header.xml'))
     seal_style = None
+    hh = 'http://www.hancom.co.kr/hwpml/2011/head'
+    styles = header.findall('.//' + _q(hh, 'paraPr'))
+    for style in styles:
+        setting = style.find(_q(hh, 'breakSetting'))
+        if setting is not None:
+            setting.set('breakLatinWord', 'BREAK_WORD')
+            setting.set('breakNonLatinWord', 'BREAK_WORD')
+            setting.set('widowOrphan', '1')
+    layout_styles = {}
+    container = styles[0].getparent()
+    next_id = max(int(node.get('id')) for node in styles) + 1
+    for name, original in (('title', '21'), ('heading', '23'), ('signature', '22'), ('date', '21')):
+        style = deepcopy(next(node for node in styles if node.get('id') == original))
+        style.set('id', str(next_id))
+        style.find(_q(hh, 'breakSetting')).set('keepWithNext', '1')
+        container.append(style)
+        layout_styles[name] = next_id
+        next_id += 1
+    container.set('itemCnt', str(len(container)))
     if seal:
         hh = 'http://www.hancom.co.kr/hwpml/2011/head'
         styles = header.findall('.//' + _q(hh, 'paraPr'))
         seal_style = max(int(node.get('id')) for node in styles) + 1
-        style = deepcopy(next(node for node in styles if node.get('id') == '22'))
+        style = deepcopy(next(node for node in styles if node.get('id') == str(layout_styles['signature'])))
         style.set('id', str(seal_style))
         width = seal['width_mm'] * 7200 / 25.4
         height = seal['height_mm'] * 7200 / 25.4
@@ -561,7 +626,7 @@ def render_hwpx(definition: dict, values: dict, seal=None) -> bytes:
         container = styles[0].getparent()
         container.append(style)
         container.set('itemCnt', str(len(container)))
-    section, preview = _hwpx_section(definition, values, seal, seal_style)
+    section, preview = _hwpx_section(definition, values, seal, seal_style, layout_styles)
     out = BytesIO()
     with ZipFile(BASE_HWPX) as src, ZipFile(out, "w") as dst:
         for item in src.infolist():

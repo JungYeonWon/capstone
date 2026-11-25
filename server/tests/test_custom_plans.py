@@ -202,6 +202,18 @@ class CustomPlanTests(unittest.TestCase):
         self.assertEqual(doc['values']['work_summary'],'')
         self.assertEqual(doc['values']['contract_title'],'수정 계약')
 
+    def test_document_save_rejects_stale_version_without_losing_saved_content(self):
+        doc = self.create()['document']
+        path = f"/api/v1/documents/{doc['id']}"
+        payload = {'values': {'description': '먼저 저장한 작업'}, 'expected_updated_at': doc['updated_at']}
+        first = self.client.put(path, headers=self.headers[0], json=payload)
+        self.assertEqual(first.status_code, 200, first.text)
+        stale = self.client.put(path, headers=self.headers[0], json={**payload, 'values': {'description': '오래된 창의 작업'}})
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(self.client.get(path, headers=self.headers[0]).json()['values']['description'], '먼저 저장한 작업')
+        retry = self.client.put(path, headers=self.headers[0], json={'values': {'description': '비교 후 선택한 작업'}, 'expected_updated_at': first.json()['updated_at']})
+        self.assertEqual(retry.status_code, 200, retry.text)
+
     def test_contract_review_binds_consent_and_verifies_cross_document_quotes(self):
         layout = custom_plans.local_layout(self.request, 'free', '개발 용역 계약서').model_dump()
         doc_id = self.create(layout)['document']['id']

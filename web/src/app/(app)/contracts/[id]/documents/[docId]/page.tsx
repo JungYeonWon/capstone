@@ -3,7 +3,7 @@
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useQueryParam, useStandardFields } from "@/lib/hooks";
 import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 import type { Doc, Template } from "@/lib/types";
@@ -11,6 +11,7 @@ import { Badge, Button, Card, CardHeader, ErrorText, Field, Input, Loading, Page
 import TableFieldEditor from "@/components/TableFieldEditor";
 import DraftAssistant from "@/components/workspace/DraftAssistant";
 import DocumentDraftBuffer from "@/components/workspace/DocumentDraftBuffer";
+import { RecoveryComparison } from "@/components/workspace/DraftRecovery";
 
 const LONG_FIELDS = new Set([
   "attachment_list",
@@ -51,6 +52,7 @@ export default function DocumentEditor() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState<string>("");
+  const [remoteDocument, setRemoteDocument] = useState<Doc | null>(null);
 
   const loadPreview = useCallback(async () => {
     setPreviewLoading(true);
@@ -92,20 +94,26 @@ export default function DocumentEditor() {
   }, [template]);
 
   const dirty = doc && JSON.stringify(values) !== JSON.stringify(doc.values);
-  const markSaved = useUnsavedChanges(Boolean(dirty));
+  useUnsavedChanges(Boolean(dirty));
 
-  const save = async () => {
+  const save = async (version = doc?.updated_at) => {
     setSaving(true);
     setError("");
     try {
-      const d = await api.put<Doc>(`/documents/${docId}`, { values });
+      const sent = values;
+      const d = await api.put<Doc>(`/documents/${docId}`, { values: sent, expected_updated_at: version });
       setDoc(d);
-      setValues(d.values);
-      markSaved();
+      setValues(current => Object.fromEntries(Object.keys({ ...d.values, ...current }).map(key =>
+        [key, current[key] === sent[key] ? d.values[key] ?? "" : current[key] ?? ""])));
+      setRemoteDocument(null);
       await loadPreview();
       setSavedAt(new Date().toLocaleTimeString("ko-KR"));
     } catch (e) {
       setError((e as Error).message);
+      if (e instanceof ApiError && e.status === 409) {
+        try { setRemoteDocument(await api.get<Doc>(`/documents/${docId}`)); }
+        catch { /* Keep the current input so the user can retry loading the comparison. */ }
+      }
     } finally {
       setSaving(false);
     }
@@ -215,10 +223,11 @@ export default function DocumentEditor() {
                 >
                   <div className={`rounded-lg ${focus === k ? "ring-2 ring-amber-400 ring-offset-2" : ""}`}>
                     {table ? <TableFieldEditor id={`f-${k}`} columns={section.columns} value={values[k] ?? ""} disabled={saving || Boolean(busy)} onChange={text => setValues(previous => ({ ...previous, [k]: text }))} /> : (LONG_FIELDS.has(k) || k.startsWith("custom_")) ? (
-                      <Textarea id={`f-${k}`} rows={4} value={values[k] ?? ""} onChange={(e) => setValues({ ...values, [k]: e.target.value })} />
+                      <Textarea id={`f-${k}`} rows={4} disabled={saving || Boolean(busy)} value={values[k] ?? ""} onChange={(e) => setValues({ ...values, [k]: e.target.value })} />
                     ) : (
                       <Input
                         id={`f-${k}`}
+                        disabled={saving || Boolean(busy)}
                         value={values[k] ?? ""}
                         onChange={(e) => setValues({ ...values, [k]: e.target.value })}
                         className={missing ? "border-red-300" : ""}
@@ -236,7 +245,7 @@ export default function DocumentEditor() {
           </div>
           <div className="flex items-center justify-between gap-3 border-t border-line px-5 py-3">
             <span className="text-xs text-muted">{dirty ? "저장하지 않은 변경사항" : savedAt && `저장됨 ${savedAt}`}</span>
-            <Button onClick={save} loading={saving} disabled={!dirty}>
+            <Button onClick={() => save()} loading={saving} disabled={!dirty}>
               저장하고 미리보기
             </Button>
           </div>
@@ -245,6 +254,9 @@ export default function DocumentEditor() {
               <ErrorText>{error}</ErrorText>
             </div>
           )}
+          {remoteDocument && <RecoveryComparison local={values} remote={remoteDocument.values} busy={saving}
+            onLocal={() => void save(remoteDocument.updated_at)}
+            onRemote={() => { setDoc(remoteDocument); setValues(remoteDocument.values); setRemoteDocument(null); setError(""); void loadPreview(); }} />}
         </Card>
 
         <div className="min-w-0">

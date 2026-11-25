@@ -8,7 +8,7 @@ from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.utils import ImageReader
 
 
@@ -36,6 +36,9 @@ def render_pdf(doc, font):
                                spaceAfter=0 if cell else (fmt.space_after.pt if fmt.space_after else 6),
                                spaceBefore=0 if cell else (fmt.space_before.pt if fmt.space_before else 0),
                                keepWithNext=bool(fmt.keep_with_next))
+        style.splitLongWords = True
+        style.allowWidows = 0
+        style.allowOrphans = 0
         style.leftIndent = fmt.left_indent.pt if fmt.left_indent else 0
         style.rightIndent = fmt.right_indent.pt if fmt.right_indent else 0
         content = []
@@ -71,6 +74,8 @@ def render_pdf(doc, font):
             scale = width / sum(widths)
             widths = [w * scale for w in widths]
             rows, heights, spans = [], [], []
+            oversized_row = False
+            page_body_height = section.page_height.pt - section.top_margin.pt - section.bottom_margin.pt
             commands = [("GRID", (0, 0), (-1, -1), .45, colors.HexColor("#444444")),
                         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                         ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
@@ -82,7 +87,12 @@ def render_pdf(doc, font):
                     end = ci
                     while end + 1 < len(row.cells) and row.cells[end + 1]._tc is cell._tc:
                         end += 1
-                    data.append([paragraph(p, "cell", True) for p in cell.paragraphs])
+                    paragraphs = [paragraph(p, "cell", True) for p in cell.paragraphs]
+                    cell_width = max(1, sum(widths[ci:end + 1]) - 16)
+                    content_height = sum(item.wrap(cell_width, page_body_height)[1] for item in paragraphs) + 14
+                    if content_height > page_body_height - 45:
+                        oversized_row = True
+                    data.append(paragraphs)
                     data.extend([""] * (end - ci))
                     if end > ci:
                         spans.append(("SPAN", (ci, ri), (end, ri)))
@@ -94,8 +104,13 @@ def render_pdf(doc, font):
                     ci = end + 1
                 rows.append(data)
                 heights.append(row.height.pt if row.height else 0)
-            repeat = 1 if source.rows[0]._tr.xpath("./w:trPr/w:tblHeader") else 0
-            table = Table(rows, colWidths=widths, minRowHeights=heights, repeatRows=repeat, hAlign="CENTER", splitInRow=1)
+            repeat = 0
+            for row in source.rows:
+                if not row._tr.xpath("./w:trPr/w:tblHeader"):
+                    break
+                repeat += 1
+            table = Table(rows, colWidths=widths, minRowHeights=heights, repeatRows=repeat,
+                          hAlign="CENTER", splitInRow=int(oversized_row))
             table.setStyle(TableStyle(commands + spans))
             story.extend([table, Spacer(1, 8)])
 
@@ -107,8 +122,11 @@ def render_pdf(doc, font):
         canvas.restoreState()
 
     out = BytesIO()
-    SimpleDocTemplate(out, pagesize=(section.page_width.pt, section.page_height.pt),
-                      leftMargin=section.left_margin.pt, rightMargin=section.right_margin.pt,
-                      topMargin=section.top_margin.pt, bottomMargin=section.bottom_margin.pt,
-                      title=doc.core_properties.title or "계약 제출서류").build(story, onFirstPage=footer, onLaterPages=footer)
+    document = BaseDocTemplate(out, pagesize=(section.page_width.pt, section.page_height.pt),
+                               title=doc.core_properties.title or "계약 제출서류")
+    frame = Frame(section.left_margin.pt, section.bottom_margin.pt, width,
+                  section.page_height.pt - section.top_margin.pt - section.bottom_margin.pt,
+                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    document.addPageTemplates(PageTemplate(id="document", frames=[frame], onPage=footer))
+    document.build(story)
     return out.getvalue()

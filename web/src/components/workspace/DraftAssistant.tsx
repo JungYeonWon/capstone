@@ -6,6 +6,7 @@ import { useWorkspaceDraft } from "@/lib/useWorkspaceDraft";
 import type { Doc, Template } from "@/lib/types";
 import { Button, Card, ErrorText, Textarea } from "@/components/ui";
 import TableFieldEditor from "@/components/TableFieldEditor";
+import DraftRecovery from "./DraftRecovery";
 
 type Question = { key: string; label: string; question: string; kind: "table" | "text"; columns: string[] };
 type Transfer = { payload_preview: string; consent_digest: string; ai_available: boolean; questions: Question[] };
@@ -33,6 +34,7 @@ export default function DraftAssistant({ doc, template, values, onApply }: { doc
     <p className="text-sm text-muted">부족한 정보를 답변하면 확인된 내용으로 초안을 제안합니다. 모르는 사실은 빈칸으로 두세요. 제안은 선택한 항목에만 반영되며 저장 전 검토할 수 있습니다.</p>
     <ErrorText>{error || answers.error}</ErrorText>
     <p role="status" className="text-xs text-muted">답변: {answers.status}</p>
+    <DraftRecovery draft={answers} />
     <Button variant="secondary" disabled={busy || !answers.ready} onClick={() => act(async () => {
       setTransfer(await api.post<Transfer>(`/documents/${doc.id}/draft/preview`, { values, answers: answers.value.answers })); setConfirmed(snapshot); setConsent(false); setSuggestion(null);
     })}>부족한 정보 질문 확인</Button>

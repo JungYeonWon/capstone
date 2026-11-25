@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button, Card, ErrorText, PageHeader, Textarea } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useQueryParam } from "@/lib/hooks";
 import type { Doc } from "@/lib/types";
 import { questionText, reviewDate, type ReviewRecord, type ReviewSummary, type ReviewEdit } from "@/lib/review-history";
@@ -38,6 +38,7 @@ export default function ContractReviewPage() {
   useUnsavedChanges(Object.keys(edits).length > 0);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [retryAI, setRetryAI] = useState(false);
   const [unreadFiles, setUnreadFiles] = useState<string[]>([]);
   const base = `/contracts/${id}/clause-review`;
   const docId = selection ?? (docs.some(doc => String(doc.id) === document) ? document : "");
@@ -88,6 +89,7 @@ export default function ContractReviewPage() {
     catch (e) { setError((e as Error).message); } finally { setBusy(""); }
   }
   function invalidateReview() {
+    setRetryAI(false);
     setInputVersion(previous => previous + 1);
     setTransmission(null);
     setConsent(false);
@@ -136,6 +138,7 @@ export default function ContractReviewPage() {
       }
     } catch (e) {
       setError((e as Error).message);
+      if (action === "analyze") setRetryAI(e instanceof ApiError && e.retryable);
     } finally {
       setBusy("");
     }
@@ -211,7 +214,7 @@ export default function ContractReviewPage() {
             <input type="checkbox" className="mt-1" checked={consent} disabled={!!busy}
               onChange={event => setConsent(event.target.checked)} />위 내용의 이번 AI 전송에 동의합니다.
           </label> : <p className="text-sm text-amber-800">외부 AI가 연결되어 있지 않습니다.</p>}
-          <Button loading={busy === "계약 조항 검토 중"} disabled={!consent || !!busy} onClick={() => run("analyze")}>AI로 계약서 검토</Button>
+          <Button loading={busy === "계약 조항 검토 중"} disabled={!consent || !!busy} onClick={() => run("analyze")}>{retryAI ? "AI 검토 다시 시도" : "AI로 계약서 검토"}</Button>
         </div>}
         {busy && <p role="status" className="text-sm text-muted">{busy}</p>}
         <div className="whitespace-pre-wrap"><ErrorText>{error}</ErrorText></div>

@@ -3,6 +3,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -42,9 +43,22 @@ def update_document(document_id: int, body: DocumentUpdate, user: User = Depends
     if "payment_amount" in changed and "payment_amount_korean" in allowed:
         amount = int("".join(ch for ch in changed["payment_amount"] if ch.isdigit()) or 0)
         changed["payment_amount_korean"] = korean_amount(amount) if amount else ""
-    d.values = {**d.values, **changed}
-    d.status = "draft"
+    values = {**d.values, **changed}
+    if body.expected_updated_at is not None:
+        expected = body.expected_updated_at
+        if expected.tzinfo is not None:
+            from datetime import timezone
+            expected = expected.astimezone(timezone.utc).replace(tzinfo=None)
+        updated = db.scalar(update(Document).where(Document.id == d.id, Document.updated_at == expected)
+                            .values(values=values, status="draft").returning(Document.id))
+        if updated is None:
+            db.rollback()
+            raise HTTPException(409, "다른 창에서 문서를 저장했습니다. 현재 작업과 서버 저장본을 비교하세요.")
+    else:
+        d.values = values
+        d.status = "draft"
     db.commit()
+    db.refresh(d)
     return to_out(d)
 
 
