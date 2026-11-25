@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services import ai
 from app.services.document_workflow import transfer
 from app.services.contract_review_checks import supplement
+from app.services.contract_review_quality import verified, conditions, group_and_rank
 
 
 class SourcePart(BaseModel):
@@ -51,11 +52,24 @@ class Finding(BaseModel):
     impact: str
     question: str
     evidence: list[Evidence]
+    context_evidence: list[Evidence] = Field(default_factory=list, max_length=3)
+    context_note: str = Field(default='', max_length=350)
+    priority: Literal['high', 'medium', 'low'] = 'medium'
+    assessment: Literal['risk', 'uncertain'] = 'risk'
+
+
+class AddressedIssue(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    category: Category
+    original: Evidence
+    qualification: Evidence
+    reason: str = Field(min_length=1, max_length=350)
 
 
 class ReviewResponse(BaseModel):
     model_config = ConfigDict(extra='forbid')
     findings: list[Finding]
+    addressed: list[AddressedIssue] = Field(default_factory=list, max_length=12)
 
 
 def preview(body: ReviewIn, document: ReviewFile | None) -> dict:
@@ -85,6 +99,13 @@ def analyze(payload: str) -> dict:
         '대금 지급 전 권리 이전·기존 기술·오픈소스, 운영비·인수인계, 자동 갱신·통지 기한, '
         '일방 변경·채권 양도, 재위탁·보안 사고 책임, 비밀유지·데이터 반환·삭제, 분쟁 관할. '
         '점검 항목마다 실제 의무 주체와 우리 측 역할, 면책·상한·서면 동의 조건을 고려한다. '
+        '불리한 표현만 떼어 판단하지 않는다. 동일 의무의 예외·상한·책임 주체·적용 기간을 모든 자료에서 확인하고 '
+        '우선순위 조항이 있을 때만 별첨의 우선 적용을 전제한다. '
+        '이미 보완된 조건은 findings에 반복 지적하지 않는다. 이 경우 addressed에 category,original,qualification,reason을 넣어 '
+        '원래 의무와 이를 제한하는 서로 다른 실제 인용을 각각 제시한다. 안전·해결 완료 판정은 아니다. '
+        'findings의 context_evidence에는 실제 예외·한도·연결 조건의 근거를 넣고 context_note에는 적용 관계와 남은 부담을 설명한다. '
+        '다른 의무의 상한을 잘못 적용하지 않는다. 명확한 연결이 없거나 적용 관계가 충돌하면 assessment=uncertain으로 판단을 보류하고 필요한 자료를 question에 묻는다. '
+        'priority는 확인 우선순위 high/medium/low다. 지급 무기한 보류·무제한 책임 등 큰 부담을 먼저 두며 법적 위험 확률이나 확정 판단은 아니다. '
         '같은 유형이라도 서로 다른 의무는 누락하지 않는다. 반복 조항만 합치며 가벼운 항목으로 중대한 항목을 밀어내지 않는다. '
         '각 결과의 evidence에 관련 source_id와 원문 그대로의 연속 인용을 각각 넣는다. '
         '한 결과에 근거 1~3개, 각 인용은 8~350자, title은 80자, impact와 question은 각각 350자 이내다. '
@@ -109,6 +130,11 @@ def analyze(payload: str) -> dict:
         raise HTTPException(502, 'AI 검토 결과를 받아오지 못했습니다. 다시 시도하세요.') from error
 
     sources = {source['source_id']: source for source in json.loads(payload)['sources']}
+    addressed = []
+    for item in response.addressed:
+        original, qualification = verified(item.original, sources), verified(item.qualification, sources)
+        if original and qualification and (original['source_id'], original['quote']) != (qualification['source_id'], qualification['quote']):
+            addressed.append({'category': item.category, 'original': original, 'qualification': qualification, 'reason': item.reason})
     findings = []
     for finding in response.findings[:20]:
         if not (1 <= len(finding.evidence) <= 3 and 0 < len(finding.title.strip()) <= 80
@@ -122,12 +148,31 @@ def analyze(payload: str) -> dict:
                 break
             citations.append({'source_id':evidence.source_id,'name': source['name'], 'page': source['page'], 'quote': quote})
         if len(citations) == len(finding.evidence):
+            contexts = [verified(e, sources) for e in finding.context_evidence]
+            if any(e is None for e in contexts): continue
+            discovered = [item for e in citations for item in conditions(finding.category, list(sources.values()), e)
+                          if item not in contexts and item not in citations]
+            # Newly discovered qualifications make a simple risk claim inconclusive.
+            if discovered:
+                contexts = (contexts + [item for index, item in enumerate(discovered) if item not in discovered[:index]])[:3]
+            assessment = 'uncertain' if discovered else finding.assessment
+            context_note = finding.context_note
+            if discovered: context_note = '주변 또는 참조 자료에 제한·예외 표현이 있습니다. 동일 의무에 적용되는지 함께 확인하세요.'
+            if contexts and not context_note: context_note = '제한·예외의 실제 적용 범위를 함께 확인하세요.'
             findings.append({
                 'category': finding.category, 'title': finding.title, 'impact': finding.impact,
                 'question': finding.question, 'evidence': citations,
                 'method': 'ai',
+                'context_evidence': contexts, 'context_note': context_note,
+                'priority': finding.priority, 'assessment': assessment,
             })
     excluded = len(response.findings) - len(findings)
-    candidates, omitted = supplement(list(sources.values()), json.loads(payload)['role'], findings)
-    return {'findings': findings + candidates, 'excluded': excluded,
-            'supplement_omitted': omitted, 'review_version': 2}
+    covered = findings + [{'evidence': [item['original'], item['qualification']]} for item in addressed]
+    candidates, omitted = supplement(list(sources.values()), json.loads(payload)['role'], covered)
+    for candidate in candidates:
+        candidate.update(priority='low', assessment='uncertain', context_note='', context_evidence=[])
+        candidate['context_evidence'] = conditions(candidate['category'], list(sources.values()), candidate['evidence'][0])
+        if candidate['context_evidence']: candidate['context_note'] = '제한·예외가 함께 발견됐습니다. 문구 일치만으로 불리함을 확정하지 말고 적용 범위를 확인하세요.'
+    ranked, deduplicated = group_and_rank(findings + candidates)
+    return {'findings': ranked, 'excluded': excluded, 'addressed': addressed, 'deduplicated': deduplicated,
+            'supplement_omitted': omitted, 'review_version': 3}

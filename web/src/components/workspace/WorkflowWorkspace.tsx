@@ -10,6 +10,8 @@ import { Button, Card, ErrorText, Loading, PageHeader } from "@/components/ui";
 import WorkflowInputs from "./WorkflowInputs";
 import WorkflowResults from "./WorkflowResults";
 import WorkflowEstimate from "./WorkflowEstimate";
+import DraftMergeReview from "./DraftMergeReview";
+import { applyDraftChange, compareDrafts, identifyDrafts } from "@/lib/draft-reconciliation";
 
 export default function WorkflowWorkspace({ contractId, mode }: { contractId: number; mode: WorkflowMode }) {
   const base = `/contracts/${contractId}/ai-workflows/${mode}`;
@@ -23,6 +25,7 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [preview, setPreview] = useState<WorkflowPreview | null>(null);
+  const [preparedInput, setPreparedInput] = useState<WorkflowInput | null>(null);
   const [consent, setConsent] = useState(false);
   const [generation, setGeneration] = useState(0);
   const [created, setCreated] = useState<Record<number, string>>({});
@@ -33,7 +36,8 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
     Promise.all([api.get<{ payload: WorkflowSession | null; revision: number }>(`${base}/session`), api.get<Doc[]>(`/contracts/${contractId}/documents`)])
       .then(([saved, documents]) => {
         if (!active) return;
-        if (saved.payload) setSession(saved.payload);
+        if (saved.payload) setSession({ ...saved.payload, output: saved.payload.output ? { ...saved.payload.output, result: {
+          ...saved.payload.output.result, drafts: identifyDrafts(saved.payload.output.result.drafts) } } : null });
         setRevision(saved.revision); setDocs(documents); setLoaded(true); setError("");
       }).catch(e => { if (active) setError((e as Error).message); });
     return () => { active = false; };
@@ -41,18 +45,29 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
 
   const editInput = (input: WorkflowInput) => {
     setSession(current => ({ ...current, input, output_stale: !!current.output }));
-    setPreview(null); setConsent(false); setDirty(true); setMessage("");
+    setPreview(null); setPreparedInput(null); setConsent(false); setDirty(true); setMessage("");
   };
-  const answer = (question: string, text: string) => {
+  const answer = (question: string, text: string, confirmed = false, topic = "other", resolves: string[] = []) => {
     const existing = session.input.answers.find(a => a.question === question);
     if (!existing && session.input.answers.length >= 12) return;
-    editInput({ ...session.input, answers: existing ? session.input.answers.map(a => a.question === question ? { ...a, text } : a) : [...session.input.answers, { question, text }] });
+    editInput({ ...session.input, answers: existing ? session.input.answers.map(a => a.question === question ? { ...a, text, confirmed, topic, resolves } : a) : [...session.input.answers, { question, text, confirmed, topic, resolves }] });
   };
   const editDraft = (index: number, draft: WorkflowDraft) => {
     setSession(current => current.output ? { ...current, output: { ...current.output, result: { ...current.output.result,
       drafts: current.output.result.drafts.map((d, n) => n === index ? draft : d) } } } : current);
     setCreated(current => { const next = { ...current }; delete next[index]; return next; });
     setDirty(true); setMessage("");
+    setPreview(null); setPreparedInput(null); setConsent(false);
+  };
+  const resolveChange = (id: string, accept: boolean) => {
+    const change = session.draft_changes?.find(item => item.id === id);
+    if (!change || !session.output) return;
+    try {
+      const drafts = accept ? applyDraftChange(session.output.result.drafts, change) : session.output.result.drafts;
+      setSession(current => current.output ? { ...current, output: { ...current.output, result: { ...current.output.result, drafts } },
+        draft_changes: current.draft_changes?.filter(item => item.id !== id) } : current);
+      setGeneration(n => n + 1); setCreated({}); setDirty(true); setPreview(null); setPreparedInput(null); setConsent(false); setError(""); setMessage("");
+    } catch (e) { setError((e as Error).message); }
   };
   const upload = async (file: File) => {
     if (file.size > 3 * 1024 * 1024) { setError("파일당 최대 3MB입니다."); return; }
@@ -64,19 +79,30 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
     finally { setBusy(false); }
   };
   const prepare = async () => {
+    if (session.draft_changes?.length) return;
     setBusy(true); setError(""); setConsent(false); setPreview(null);
-    try { setPreview(await api.post<WorkflowPreview>(`${base}/preview`, session.input)); }
+    try {
+      const body = { ...session.input, draft_context: session.output?.result.drafts ?? [] };
+      const response = await api.post<WorkflowPreview>(`${base}/preview`, body);
+      setPreparedInput(body); setPreview(response);
+    }
     catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
   const analyze = async () => {
-    if (!preview || !consent || !preview.ai_available) return;
+    if (!preview || !preparedInput || !consent || !preview.ai_available || session.draft_changes?.length) return;
     setBusy(true); setError(""); setMessage("");
     try {
-      const output = await api.post<WorkflowOutput>(`${base}/analyze`, { ...session.input, consent_digest: preview.consent_digest });
-      setSession(current => ({ ...current, output, output_stale: false }));
+      const output = await api.post<WorkflowOutput>(`${base}/analyze`, { ...preparedInput, consent_digest: preview.consent_digest });
+      setSession(current => {
+        const old = identifyDrafts(current.output?.result.drafts ?? []);
+        const incoming = identifyDrafts(output.result.drafts, old);
+        const changes = old.length ? compareDrafts(old, current.draft_baseline ?? [], incoming) : [];
+        return { ...current, output: { ...output, result: { ...output.result, drafts: old.length ? old : incoming } },
+          output_stale: false, draft_baseline: incoming, draft_changes: changes };
+      });
       setCreated({}); setGeneration(n => n + 1); setDirty(true); setConsent(false); setPreview(null);
-      setMessage("분석 결과가 생성됐습니다. 내용을 검토하고 작업 저장 또는 서류로 저장을 진행하세요.");
+      setMessage(session.output ? "새 분석 결과를 받았습니다. 기존 초안과 견적 입력은 유지했으며, 달라진 문구는 항목별로 선택 반영할 수 있습니다." : "분석 결과가 생성됐습니다. 내용을 검토하고 작업 저장 또는 서류로 저장을 진행하세요.");
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -90,7 +116,8 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
     finally { setBusy(false); }
   };
   const createDocument = async (index: number) => {
-    if (!session.output || session.output_stale || created[index]) return;
+    if (!session.output || session.output_stale || created[index] || session.draft_changes?.some(change => change.kind === session.output!.result.drafts[index].kind)) return;
+    if (session.output.result.questions.some(question => question.intent === "conflict")) { setError("충돌하는 요구사항을 먼저 확인하고 다시 분석하세요."); return; }
     const draft = session.output.result.drafts[index];
     setBusy(true); setError(""); setMessage("");
     try {
@@ -118,7 +145,8 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
         <Card className="space-y-4 p-5">
           <h2 className="font-semibold">{config.title}</h2>
           <WorkflowInputs mode={mode} input={session.input} docs={docs} busy={busy} onChange={editInput} onUpload={upload} />
-          <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy} onClick={prepare}>AI 전송 내용 확인</Button><Button variant="secondary" disabled={busy || !dirty} onClick={save}>작업 저장</Button></div>
+          <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy || !!session.draft_changes?.length} onClick={prepare}>AI 전송 내용 확인</Button><Button variant="secondary" disabled={busy || !dirty} onClick={save}>작업 저장</Button></div>
+          {!!session.draft_changes?.length && <p className="text-xs text-amber-800">재분석 변경 제안을 먼저 선택하세요. 미선택 제안도 작업 저장으로 보관할 수 있습니다.</p>}
           <p className="text-xs text-muted">{dirty ? "미저장 변경사항이 있습니다." : "저장된 상태입니다."} 작업은 기능별 1개씩 암호화 저장됩니다. 30일간 수정하지 않은 작업은 정리될 수 있습니다. 생성해 저장한 서류는 계약에 남습니다.</p>
           {preview && <section className="space-y-3 rounded border border-line p-3">
             <h3 className="text-sm font-semibold">OpenAI에 전송할 내용</h3>
@@ -131,9 +159,9 @@ export default function WorkflowWorkspace({ contractId, mode }: { contractId: nu
         </Card>
         {mode === "requirements" && <Card className="p-5"><WorkflowEstimate lines={session.estimate_lines} disabled={busy} onChange={estimate_lines => { setSession(current => ({ ...current, estimate_lines })); setDirty(true); setMessage(""); }} /></Card>}
       </div>
-      {session.output ? <WorkflowResults key={generation} output={session.output} input={session.input} stale={session.output_stale} busy={busy}
+      {session.output ? <div className="space-y-5"><DraftMergeReview changes={session.draft_changes ?? []} busy={busy} onResolve={resolveChange} /><WorkflowResults key={generation} output={session.output} input={session.input} stale={session.output_stale} busy={busy} mode={mode} pendingKinds={(session.draft_changes ?? []).map(change => change.kind)}
         onAnswer={answer} onDraft={editDraft} onCreate={createDocument} created={created}
-        estimateReady={session.estimate_lines.length > 0 && estimateAmounts(session.estimate_lines).total !== null} /> :
+        estimateReady={session.estimate_lines.length > 0 && estimateAmounts(session.estimate_lines).total !== null} /></div> :
         <Card className="space-y-3 p-6"><h2 className="font-semibold">분석 결과와 서류 초안</h2><p className="text-sm text-muted">자료를 입력하고 전송 내용을 확인한 뒤 AI 분석을 실행하세요. 결과에서 근거와 확인 질문을 검토하고, 초안을 편집해 서류로 저장할 수 있습니다.</p></Card>}
     </div>
   </>;

@@ -52,7 +52,8 @@ def to_out(row,detail=True):
         'document_id':payload.get('document_id'),'source_files':[{'key':g['key'],'name':g['name']} for g in file_groups(payload['sources']).values()],
         'finding_count':len(payload['findings']),'resolved_count':sum(f.get('status')=='resolved' for f in payload['findings'])}
     if detail:result.update(findings=payload['findings'],excluded=payload.get('excluded',0),warning=payload.get('warning',''),
-        supplement_omitted=payload.get('supplement_omitted',0),review_version=payload.get('review_version',1))
+        supplement_omitted=payload.get('supplement_omitted',0),review_version=payload.get('review_version',1),
+        addressed=payload.get('addressed',[]),deduplicated=payload.get('deduplicated',0))
     return result
 
 
@@ -64,7 +65,8 @@ def save(db,user,contract,body,transmission,result):
     findings=[{**item,'status':'pending','note':''} for item in result['findings']]
     payload={'contract_title':contract.contract_title,'role':body.role,'document_id':body.document_id,'document_signature':transmission.get('document_signature'), 'sources':snapshot['sources'],
         'findings':findings,'excluded':result['excluded'],'warning':transmission.get('warning',''),
-        'supplement_omitted':result.get('supplement_omitted',0),'review_version':result.get('review_version',1)}
+        'supplement_omitted':result.get('supplement_omitted',0),'review_version':result.get('review_version',1),
+        'addressed':result.get('addressed',[]),'deduplicated':result.get('deduplicated',0)}
     row=ClauseReview(contract_id=contract.id,payload=payload)
     db.add(row);db.flush()
     db.add(AuditLog(user_id=user.id,action='review_save',detail=f'계약 {contract.id} 검토 이력 {row.id} 저장'))
@@ -108,7 +110,7 @@ def compare(before,after,source_map=None):
     rows=[]
     for index,finding in enumerate(before['findings']):
         evidence=[]
-        for citation in finding['evidence']:
+        for citation in finding['evidence'] + finding.get('context_evidence',[]):
             source=source_by_id.get(citation.get('source_id'))
             key=str(source.get('file_id',source['name'])) if source else ''
             quote=normalized(citation['quote'])
@@ -173,15 +175,26 @@ def report_pdf(row,contract_title,source_state='uploaded'):
     if row.payload.get('review_version',1)>=2: add('AI 검토에 규칙 기반 확인 후보를 보완했습니다. 규칙 일치는 불리함의 확정 판단이 아니며, 표시되지 않은 조건도 별도로 확인하세요.')
     if row.payload.get('supplement_omitted'):add(f"표시 한도로 생략한 규칙 후보: {row.payload['supplement_omitted']}건. 자료를 나누어 다시 검토하세요.")
     if not row.payload['findings']:add('표시할 검토 항목이 없습니다. 문제가 없다는 판정을 의미하지 않습니다.')
+    if row.payload.get('deduplicated'):add(f"같은 근거의 중복 지적 {row.payload['deduplicated']}건을 묶었습니다.")
     for index,item in enumerate(row.payload['findings'],1):
         add(f"{index}. [{item['category']}] {item['title']}",'heading')
         if item.get('method')=='rule':add('규칙 기반 확인 후보 · 주변 조건과 실제 의무 주체 확인 필요')
+        if item.get('priority'):add('확인 우선순위: '+{'high':'높음','medium':'보통','low':'참고·확인'}[item['priority']])
+        if item.get('assessment')=='uncertain':add('판단 보류 · 적용 관계 또는 자료 확인 필요')
         add('처리 상태: '+STATUSES[item.get('status','pending')])
         for evidence in item['evidence']:
             add(evidence['name']+(f" · {evidence['page']}쪽" if evidence['page'] else '')+'\n'+evidence['quote'],'quote')
+        if item.get('context_note'):add('함께 확인할 조건: '+item['context_note'])
+        for evidence in item.get('context_evidence',[]):
+            add('제한·예외 근거 · '+evidence['name']+(f" · {evidence['page']}쪽" if evidence['page'] else '')+'\n'+evidence['quote'],'quote')
         add('예상 부담: '+item['impact']);add('확인할 질문: '+item['question'])
         if item.get('note'):add('사용자 메모: '+item['note'])
         story.append(Spacer(1,3*mm))
+    for item in row.payload.get('addressed',[]):
+        add('제한·예외 확인 메모 · '+item['category'],'heading');add(item['reason'])
+        for key in ('original','qualification'):
+            evidence=item[key];add(evidence['name']+(f" · {evidence['page']}쪽" if evidence['page'] else '')+'\n'+evidence['quote'],'quote')
+        add('이 메모는 안전 또는 문제 해결 완료 판정이 아닙니다.')
     def footer(canvas,doc):
         canvas.setFont(font,8);canvas.drawRightString(A4[0]-20*mm,12*mm,f'{doc.page}')
     SimpleDocTemplate(out,pagesize=A4,leftMargin=20*mm,rightMargin=20*mm,topMargin=18*mm,bottomMargin=22*mm).build(story,onFirstPage=footer,onLaterPages=footer)

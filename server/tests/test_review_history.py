@@ -27,6 +27,28 @@ SOURCE=PAYMENT+'\n'+SUPPORT
 
 
 class ReviewHistoryTests(unittest.TestCase):
+    def test_qualification_evidence_survives_history_pdf_and_comparison(self):
+        limit='다만 검수 기한은 요청 후 10일 이내로 정합니다.'
+        source=PAYMENT+'\n'+limit
+        body=self.body(source)
+        fake={'findings':[{'category':'검수·대금 지급','title':'지급 조건 확인','impact':'검수와 지급 기한의 적용 관계를 확인하세요.',
+            'question':'정해진 검수 기한 후 지급일은 언제인가요?','priority':'high','assessment':'uncertain',
+            'evidence':[{'source_id':1,'quote':PAYMENT}],'context_evidence':[{'source_id':1,'quote':limit}],
+            'context_note':'검수 기한의 제한과 지급 조건을 함께 확인합니다.'}]}
+        with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value=fake):
+            preview=self.post('/preview',body).json()
+            saved=self.post('/analyze',{**body,'consent_digest':preview['consent_digest']}).json()
+        loaded=self.get(f"/history/{saved['id']}").json()
+        self.assertEqual(loaded['findings'][0]['context_evidence'][0]['quote'],limit)
+        report=self.get(f"/history/{saved['id']}/pdf")
+        with pymupdf.open(stream=report.content,filetype='pdf') as pdf:
+            content=''.join(page.get_text() for page in pdf)
+        self.assertIn('제한·예외 근거',content);self.assertIn('판단 보류',content)
+        changed=self.post(f"/history/{saved['id']}/compare-draft",self.body(source.replace('10일','7일'))).json()
+        self.assertFalse(changed['items'][0]['unchanged'])
+        self.assertEqual(changed['items'][0]['evidence'][0]['status'],'unchanged')
+        self.assertEqual(changed['items'][0]['evidence'][1]['status'],'changed')
+
     def test_rule_candidates_survive_save_reload_and_pdf_export(self):
         body=self.body('계약은 별도 통지가 없으면 자동 갱신됩니다.')
         with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',return_value={'findings':[]}):
@@ -34,7 +56,7 @@ class ReviewHistoryTests(unittest.TestCase):
             response=self.post('/analyze',{**body,'consent_digest':preview['consent_digest']})
         self.assertEqual(response.status_code,200,response.text)
         saved=response.json()
-        self.assertEqual(saved['review_version'],2)
+        self.assertEqual(saved['review_version'],3)
         self.assertEqual(saved['findings'][0]['method'],'rule')
         loaded=self.get(f"/history/{saved['id']}").json()
         self.assertEqual(loaded['findings'],saved['findings'])

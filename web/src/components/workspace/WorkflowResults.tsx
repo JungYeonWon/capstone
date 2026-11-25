@@ -2,13 +2,14 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Badge, Button, Card, Input, Textarea } from "@/components/ui";
-import { DRAFT_LABELS, ITEM_LABELS, draftText, type WorkflowDraft, type WorkflowInput, type WorkflowOutput } from "@/lib/ai-workflows";
+import { DRAFT_LABELS, ITEM_LABELS, draftText, type WorkflowDraft, type WorkflowInput, type WorkflowOutput, type WorkflowMode } from "@/lib/ai-workflows";
 
-export default function WorkflowResults({ output, input, stale, busy, onAnswer, onDraft, onCreate, created, estimateReady }: {
+export default function WorkflowResults({ output, input, stale, busy, onAnswer, onDraft, onCreate, created, estimateReady, mode, pendingKinds }: {
   output: WorkflowOutput; input: WorkflowInput; stale: boolean; busy: boolean;
-  onAnswer: (question: string, text: string) => void;
+  onAnswer: (question: string, text: string, confirmed?: boolean, topic?: string, resolves?: string[]) => void;
   onDraft: (index: number, draft: WorkflowDraft) => void;
   onCreate: (index: number) => void; created: Record<number, string>; estimateReady: boolean;
+  mode: WorkflowMode; pendingKinds: string[];
 }) {
   const [approved, setApproved] = useState<Record<number, boolean>>({});
   const [fallback, setFallback] = useState("");
@@ -24,11 +25,13 @@ export default function WorkflowResults({ output, input, stale, busy, onAnswer, 
       <h2 className="font-semibold">AI 분석 결과</h2>
       {stale && <p role="status" className="rounded bg-amber-50 p-3 text-sm text-amber-900">입력 또는 답변이 바뀌었습니다. 아래는 이전 자료의 결과입니다. 전송 내용을 다시 확인하고 재분석하면 서류 저장을 진행할 수 있습니다.</p>}
       <p className="whitespace-pre-wrap text-sm">{output.result.summary}</p>
+      {output.result.quality_notes?.map(note => <p key={note} className="rounded bg-indigo-50 p-3 text-xs text-indigo-900">{note}</p>)}
       {output.warning && <p className="text-xs text-amber-800">{output.warning}</p>}
       <p className="text-xs text-muted">합의·범위 판단과 문구는 AI의 검토 후보입니다. 원문을 확인하고 초안을 수정하세요. 계약 변경이나 상대방 동의가 자동으로 확정되지는 않습니다.</p>
       {!output.result.items.length && <p className="text-sm text-muted">분류된 항목이 없습니다. 요약과 확인 질문을 검토하세요.</p>}
       {output.result.items.map((item, index) => <article key={index} className="space-y-2 rounded-lg border border-line p-4">
         <div className="flex flex-wrap gap-2"><Badge tone="indigo">{ITEM_LABELS[item.category] ?? item.category}</Badge><Badge tone={item.basis === "proposal" ? "amber" : "gray"}>{item.basis === "proposal" ? "AI 제안" : "원문 기반 후보"}</Badge></div>
+        {mode === "requirements" && <p className="text-xs text-muted">{item.confirmation === "confirmed" ? "사용자가 확정 표시한 근거 · 내용 해석 확인 필요" : item.basis === "proposal" ? "사용자 확정 전 AI 제안" : "입력에서 추출 · 사용자 확정 필요"}</p>}
         <h3 className="font-medium">{item.title}</h3><p className="whitespace-pre-wrap text-sm">{item.detail}</p>
         {item.category === "task" && <p className="text-sm">담당: {item.owner || "확인 필요"} · 기한: {item.due || "확인 필요"}</p>}
         {item.evidence.map((citation, n) => {
@@ -39,18 +42,27 @@ export default function WorkflowResults({ output, input, stale, busy, onAnswer, 
     </Card>
     {!!output.result.questions.length && <Card className="space-y-4 p-5">
       <h2 className="font-semibold">AI가 확인할 질문</h2><p className="text-xs text-muted">아는 내용을 답하고 왼쪽에서 다시 분석하세요. 기존 답변도 함께 전달됩니다. 모르는 조건은 비워두세요.</p>
-      {output.result.questions.map(({ question, reason }) => <label key={question} className="block text-sm">{question}<span className="mt-1 block text-xs text-muted">{reason}</span>
+      {output.result.questions.map(({ question, reason, topic, intent, evidence }) => <div key={question} className="space-y-2">
+        {intent === "conflict" && <Badge tone="amber">충돌 확인 · 결정 필요</Badge>}
+        {intent === "followup" && <Badge tone="indigo">기존 답변의 세부 조건 확인</Badge>}
+        {evidence?.map((citation, index) => <blockquote key={index} className="rounded bg-slate-50 p-2 text-xs">{output.sources.find(source => source.source_id === citation.source_id)?.name} · {citation.quote}</blockquote>)}
+        <label className="block text-sm">{question}<span className="mt-1 block text-xs text-muted">{reason}</span>
         <Textarea rows={2} maxLength={1500} disabled={busy || (input.answers.length >= 12 && !input.answers.some(a => a.question === question))}
-          value={input.answers.find(a => a.question === question)?.text ?? ""} onChange={e => onAnswer(question, e.target.value)} /></label>)}
+          value={input.answers.find(a => a.question === question)?.text ?? ""} onChange={e => onAnswer(question, e.target.value, false, topic, intent === "conflict" ? evidence?.map(c => c.quote) : [])} /></label>
+        {mode === "requirements" && <label className="flex gap-2 text-xs"><input type="checkbox" disabled={busy || !input.answers.find(a => a.question === question)?.text.trim()}
+          checked={input.answers.find(a => a.question === question)?.confirmed ?? false} onChange={e => onAnswer(question, input.answers.find(a => a.question === question)?.text ?? "", e.target.checked, topic, intent === "conflict" ? evidence?.map(c => c.quote) : [])} />이 답변을 확정한 요구사항으로 반영</label>}
+      </div>)}
       {input.answers.length >= 12 && <p className="text-xs text-amber-800">답변은 최대 12개입니다. 왼쪽의 기존 답변에서 불필요한 항목을 삭제할 수 있습니다.</p>}
     </Card>}
     <Card className="space-y-4 p-5">
       <h2 className="font-semibold">후속 서류 초안</h2><p className="text-xs text-muted">문구를 직접 수정한 뒤 서류로 저장하세요. 저장하면 계약의 제출 서류 목록에 추가되며 기존 편집기에서 미리보기와 다운로드가 가능합니다.</p>
+      {output.result.questions.some(question => question.intent === "conflict") && <p className="text-xs text-amber-800">충돌하는 요구사항에 결정 내용을 답한 뒤 재분석하세요. 확인 전에는 서류 저장을 진행할 수 없습니다.</p>}
       {copied && <p role="status" className="text-sm text-primary">{copied}</p>}
       {fallback && <label className="block text-xs">직접 선택하여 복사<Textarea rows={7} readOnly value={fallback} /></label>}
       {output.result.drafts.map((draft, index) => <details key={draft.kind} className="rounded-lg border border-line p-4" open={index === 0}>
         <summary className="cursor-pointer font-medium">{DRAFT_LABELS[draft.kind] ?? draft.kind} · {draft.title}</summary>
-        <fieldset disabled={busy || stale} className="mt-4 space-y-3">
+        {pendingKinds.includes(draft.kind) && <p className="mt-3 text-xs text-amber-800">이 초안의 변경 제안을 선택한 뒤 편집·저장을 진행하세요.</p>}
+        <fieldset disabled={busy || stale || pendingKinds.includes(draft.kind)} className="mt-4 space-y-3">
           <label className="block text-xs">서류 제목<Input value={draft.title} maxLength={100} onChange={e => edit(index, { ...draft, title: e.target.value })} /></label>
           {draft.sections.map((section, n) => <div key={n} className="space-y-1">
             <label className="block text-xs">항목 {n + 1} 제목<Input value={section.label} maxLength={60} onChange={e => edit(index, { ...draft, sections: draft.sections.map((s, i) => i === n ? { ...s, label: e.target.value } : s) })} /></label>
@@ -58,7 +70,7 @@ export default function WorkflowResults({ output, input, stale, busy, onAnswer, 
           </div>)}
           {draft.kind === "estimate" && <p className="text-xs text-muted">별도 견적 계산에 입력한 항목과 합계가 문서에 추가됩니다. 초안 복사에는 계산표가 포함되지 않습니다.</p>}
           <label className="flex gap-2 text-xs"><input type="checkbox" checked={approved[index] ?? false} onChange={e => setApproved({ ...approved, [index]: e.target.checked })} />미확정 조건과 문구를 확인했으며, 검토용 초안으로 저장합니다.</label>
-          <div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" disabled={!draft.title.trim() || draft.sections.some(s => !s.label.trim()) || !approved[index] || (draft.kind === "estimate" && !estimateReady) || !!created[index]} onClick={() => onCreate(index)}>서류로 저장</Button>
+          <div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" disabled={!draft.title.trim() || draft.sections.some(s => !s.label.trim()) || !approved[index] || (draft.kind === "estimate" && !estimateReady) || !!created[index] || output.result.questions.some(question => question.intent === "conflict")} onClick={() => onCreate(index)}>서류로 저장</Button>
             <Button size="sm" variant="ghost" onClick={() => copy(draft)}>초안 복사</Button></div>
         </fieldset>
         {created[index] && <Link className="mt-3 inline-block text-sm font-medium text-primary underline" href={created[index]}>저장한 서류 열기 →</Link>}

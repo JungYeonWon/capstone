@@ -12,15 +12,18 @@ export const ITEM_LABELS: Record<string, string> = { scope_included: "기존 범
   agreed: "합의 후보 · 확인 필요", discussion: "논의·제안", open: "미결·확인 필요", task: "후속 업무" };
 export const DRAFT_LABELS: Record<string, string> = { change_agreement: "과업변경 합의서", scope: "과업지시서", estimate: "견적 구성", followup_email: "확인·협의 메일", meeting_minutes: "회의 확인서" };
 export type WorkflowFile = { name: string; kind: "input" | "reference"; parts: { page: number | null; text: string }[]; warning: string };
-export type WorkflowAnswer = { question: string; text: string };
-export type WorkflowInput = { text: string; role: "supplier" | "client"; include_contract: boolean; document_id: number | null; files: WorkflowFile[]; answers: WorkflowAnswer[]; consent_digest?: string };
-export type WorkflowSource = { source_id: number; name: string; page: number | null; kind: "input" | "reference" | "answer"; text: string };
-export type WorkflowItem = { category: string; title: string; detail: string; basis: "source" | "proposal"; owner: string; due: string; evidence: { source_id: number; quote: string }[] };
-export type WorkflowDraft = { kind: string; title: string; sections: { label: string; text: string }[] };
-export type WorkflowOutput = { result: { summary: string; items: WorkflowItem[]; questions: { question: string; reason: string }[]; drafts: WorkflowDraft[] };
+export type WorkflowAnswer = { question: string; text: string; topic?: string; confirmed?: boolean; resolves?: string[] };
+export type WorkflowInput = { text: string; role: "supplier" | "client"; include_contract: boolean; document_id: number | null; files: WorkflowFile[]; answers: WorkflowAnswer[]; consent_digest?: string; confirm_input?: boolean; draft_context?: WorkflowDraft[] };
+export type WorkflowSource = { source_id: number; name: string; page: number | null; kind: "input" | "reference" | "answer"; text: string; topic?: string; confirmed?: boolean };
+export type WorkflowItem = { category: string; title: string; detail: string; basis: "source" | "proposal"; owner: string; due: string; evidence: { source_id: number; quote: string }[]; confirmation?: "confirmed" | "tentative" | "proposal" };
+export type WorkflowSection = { id?: string; label: string; text: string };
+export type WorkflowDraft = { kind: string; title: string; sections: WorkflowSection[] };
+export type DraftChange = { id: string; kind: string; type: "title" | "section" | "add_section" | "remove_section" | "add_document" | "remove_document";
+  section_id: string; before: WorkflowSection | null; after: WorkflowSection | null; before_title: string; after_title: string; document: WorkflowDraft | null; protected: boolean };
+export type WorkflowOutput = { result: { summary: string; items: WorkflowItem[]; questions: { question: string; reason: string; topic?: string; intent?: "clarification" | "followup" | "conflict"; evidence?: { source_id: number; quote: string }[] }[]; drafts: WorkflowDraft[]; quality_notes?: string[] };
   sources: WorkflowSource[]; warning: string; consent_digest: string };
 export type EstimateLine = { label: string; quantity: string; unit: string; unit_price: string };
-export type WorkflowSession = { input: WorkflowInput; output: WorkflowOutput | null; estimate_lines: EstimateLine[]; output_stale: boolean };
+export type WorkflowSession = { input: WorkflowInput; output: WorkflowOutput | null; estimate_lines: EstimateLine[]; output_stale: boolean; draft_baseline?: WorkflowDraft[]; draft_changes?: DraftChange[] };
 export type WorkflowPreview = { payload_preview: string; consent_digest: string; ai_available: boolean; warning: string };
 export function emptyWorkflow(): WorkflowSession {
   return { input: { text: "", role: "supplier", include_contract: false, document_id: null, files: [], answers: [] }, output: null, estimate_lines: [], output_stale: false };

@@ -1,6 +1,7 @@
 """Owner-scoped workflow sessions and explicit conversion to editable documents."""
 import json
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import Field
@@ -64,11 +65,26 @@ class RunResult(flow.Strict):
     consent_digest: str = Field(max_length=64)
 
 
+class DraftChange(flow.Strict):
+    id: str = Field(min_length=1, max_length=180)
+    kind: str = Field(max_length=30)
+    type: Literal['title', 'section', 'add_section', 'remove_section', 'add_document', 'remove_document']
+    section_id: str = Field(default='', max_length=100)
+    before: flow.DraftSection | None = None
+    after: flow.DraftSection | None = None
+    before_title: str = Field(default='', max_length=100)
+    after_title: str = Field(default='', max_length=100)
+    document: flow.Draft | None = None
+    protected: bool = True
+
+
 class SessionPayload(flow.Strict):
     input: flow.WorkflowInput
     output: RunResult | None = None
     estimate_lines: list[flow.EstimateLine] = Field(default_factory=list, max_length=30)
     output_stale: bool = False
+    draft_baseline: list[flow.Draft] = Field(default_factory=list, max_length=3)
+    draft_changes: list[DraftChange] = Field(default_factory=list, max_length=70)
 
 
 class SessionIn(flow.Strict):
@@ -92,7 +108,7 @@ def save_session(contract_id: int, mode: flow.Mode, body: SessionIn,
         document = get_owned_doc(db, user, body.payload.input.document_id)
         if document.contract_id != contract_id: raise HTTPException(404, '다른 계약의 서류입니다.')
     payload = body.payload.model_dump()
-    if len(json.dumps(payload, ensure_ascii=False).encode()) > 320000:
+    if len(json.dumps(payload, ensure_ascii=False).encode()) > 640000:
         raise HTTPException(413, '저장 용량을 초과했습니다. 입력 자료를 줄여주세요.')
     if body.payload.output:
         try: flow.validate_result(mode, body.payload.output.result, body.payload.output.sources)

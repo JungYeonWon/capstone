@@ -23,6 +23,7 @@ export default function ReviewResultPanel({ record, edits, busy, onEdit, onSave,
       {!!Object.keys(edits).length && <p role="status" className="text-xs text-amber-800">미저장 상태·메모가 있습니다. 항목별로 저장한 뒤 복사·다운로드하세요.</p>}
       {copyFallback && <label className="block text-xs">질문 모음 (직접 선택해 복사 가능)<Textarea aria-label="질문 모음" rows={6} value={copyFallback} readOnly /></label>}
       {record.excluded > 0 && <p className="text-xs text-amber-800">근거 또는 형식을 확인하지 못한 AI 결과 {record.excluded}건을 제외했습니다.</p>}
+      {!!record.deduplicated && <p className="text-xs text-muted">같은 근거의 중복 지적 {record.deduplicated}건을 묶었습니다.</p>}
       {(record.review_version ?? 1) >= 2 && <p className="text-xs text-muted">AI 검토 후 원문 표현을 규칙으로 추가 점검했습니다. ‘규칙 기반 확인 후보’는 주변 예외·상한과 의무 주체를 함께 확인하세요. 표시되지 않은 조건이 안전하다는 뜻은 아닙니다.</p>}
       {!!record.supplement_omitted && <p role="status" className="text-xs text-amber-800">표시 한도로 규칙 후보 {record.supplement_omitted}건을 생략했습니다. 자료를 나누어 다시 검토하세요.</p>}
       {!record.findings.length && <p className="text-sm text-muted">표시할 검토 항목이 없습니다. 계약에 문제가 없다는 판정을 의미하지 않습니다.</p>}
@@ -30,14 +31,19 @@ export default function ReviewResultPanel({ record, edits, busy, onEdit, onSave,
         const edit = edits[index] || { status: finding.status, note: finding.note };
         return <article key={index} className="space-y-3 rounded-lg border border-line p-4">
           <Badge tone="amber">{finding.category}</Badge><h3 className="font-semibold">{finding.title}</h3>
+          {finding.priority && <p className="text-xs font-medium">확인 우선순위: {{ high: "높음", medium: "보통", low: "참고·확인" }[finding.priority]}{finding.assessment === "uncertain" ? " · 판단 보류, 적용 관계·자료 확인 필요" : ""}</p>}
           {finding.method === "rule" && <p className="text-xs text-amber-800">규칙 기반 확인 후보 · 원문과 주변 조건 확인 필요</p>}
           {finding.evidence.map((evidence, n) => <blockquote key={n} className="break-words rounded-lg bg-slate-50 p-3 text-sm"><p className="mb-1 text-xs font-medium text-muted">{evidence.name}{evidence.page ? ` · ${evidence.page}쪽` : ""}</p>{evidence.quote}</blockquote>)}
+          {finding.context_note && <p className="text-sm text-indigo-900">함께 확인할 조건 · {finding.context_note}</p>}
+          {finding.context_evidence?.map((evidence, n) => <blockquote key={`context-${n}`} className="break-words rounded-lg bg-indigo-50 p-3 text-sm"><p className="mb-1 text-xs font-medium">제한·예외 근거 · {evidence.name}{evidence.page ? ` · ${evidence.page}쪽` : ""}</p>{evidence.quote}</blockquote>)}
           <p className="text-sm">{finding.impact}</p><p className="text-sm"><strong>확인할 질문</strong> · {finding.question}</p>
           <label className="block text-xs">처리 상태<select aria-label={`항목 ${index + 1} 처리 상태`} className="mt-1 block w-full rounded border border-line bg-white p-2 text-sm" value={edit.status} disabled={busy} onChange={e => onEdit(index, { ...edit, status: e.target.value as ReviewStatus })}>{Object.entries(REVIEW_STATUS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="block text-xs">준비·협의 메모<Textarea aria-label={`항목 ${index + 1} 메모`} rows={3} maxLength={1000} value={edit.note} disabled={busy} onChange={e => onEdit(index, { ...edit, note: e.target.value })} /></label>
           <Button size="sm" variant="secondary" disabled={busy || !edits[index]} onClick={() => onSave(index)}>상태·메모 저장</Button>
         </article>;
       })}
+      {!!record.addressed?.length && <details className="rounded-lg border border-line p-3"><summary className="cursor-pointer text-sm font-medium">제한·예외 확인 메모 {record.addressed.length}건</summary><p className="mt-2 text-xs text-muted">원래 의무와 제한 조건을 함께 검토한 메모입니다. 안전하거나 해결됐다는 판정은 아닙니다.</p>
+        {record.addressed.map((item, index) => <article key={index} className="mt-3 space-y-2 text-sm"><h3 className="font-medium">{item.category}</h3><p>{item.reason}</p>{[item.original, item.qualification].map((e, n) => <blockquote key={n} className="rounded bg-slate-50 p-3"><p className="text-xs text-muted">{e.name}{e.page ? ` · ${e.page}쪽` : ""}</p>{e.quote}</blockquote>)}</article>)}</details>}
     </>}
   </Card>;
 }

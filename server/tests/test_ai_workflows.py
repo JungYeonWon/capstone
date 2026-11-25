@@ -44,6 +44,40 @@ def provider_result(mode, sources):
 
 
 class AIWorkflowTests(unittest.TestCase):
+    def test_edited_drafts_are_in_exact_consent_payload_and_changes_invalidate_consent(self):
+        draft={'kind':'scope','title':'수정한 과업지시서','sections':[{'id':'scope_section_0','label':'범위','text':'사용자가 수정한 협의 내용을 보존합니다.'}]}
+        body={**self.body(),'draft_context':[draft]}
+        with patch.object(settings,'OPENAI_API_KEY','test-only'),patch('app.services.ai._chat_json',side_effect=self.mock_ai) as mock:
+            preview=self.post('/requirements/preview',body).json()
+            self.assertIn('사용자가 수정한 협의 내용을 보존합니다.',preview['payload_preview'])
+            output=self.post('/requirements/analyze',{**body,'consent_digest':preview['consent_digest']})
+            self.assertEqual(output.status_code,200,output.text)
+            self.assertEqual(mock.call_args.args[1],preview['payload_preview'])
+            draft['sections'][0]['text']='전송 미리보기 이후 달라진 문구'
+            self.assertEqual(self.post('/requirements/analyze',{**body,'consent_digest':preview['consent_digest']}).status_code,400)
+            self.assertEqual(mock.call_count,1)
+
+    def test_pending_draft_choices_and_estimate_inputs_survive_encrypted_session_save(self):
+        _,output,_=self.run_ai('requirements')
+        before={'id':'scope_section_0','label':'범위','text':'사용자가 수정한 범위'}
+        after={**before,'text':'새로운 AI 제안'}
+        payload={'input':self.body(),'output':output,'estimate_lines':[{'label':'가상 업무','quantity':'1.25','unit':'일','unit_price':'123.45'}],
+            'draft_baseline':output['result']['drafts'],'draft_changes':[{'id':'scope_section_change','kind':'scope','type':'section',
+                'section_id':before['id'],'before':before,'after':after,'protected':True}]}
+        path=self.base+'/requirements/session'
+        saved=self.client.put(path,headers=self.headers[0],json={'payload':payload,'revision':0})
+        self.assertEqual(saved.status_code,200,saved.text)
+        loaded=self.client.get(path,headers=self.headers[0]).json()['payload']
+        self.assertEqual(loaded['draft_changes'][0]['before']['text'],'사용자가 수정한 범위')
+        self.assertEqual(loaded['draft_changes'][0]['after']['text'],'새로운 AI 제안')
+        self.assertEqual(loaded['estimate_lines'],payload['estimate_lines'])
+
+    def test_response_categories_are_specific_to_each_workflow(self):
+        sources=[{'source_id':1,'kind':'input','text':'추가 통계 화면을 확인합니다.'}]
+        for mode,invalid in [('requirements','scope_unclear'),('change','agreed'),('meeting','feature')]:
+            response=provider_result(mode,sources);response['items'][0]['category']=invalid
+            with self.subTest(mode=mode),self.assertRaises(ValueError):flow.RESPONSES[mode].model_validate(response)
+
     def setUp(self):
         self.env = patch.dict(os.environ, {'DATA_ENCRYPTION_KEYS': Fernet.generate_key().decode(), 'DATA_ENCRYPTION_KEY_FILE': ''})
         self.env.start(); cipher.cache_clear()
